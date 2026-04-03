@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agegate-sdk
+  labels:
+    app: agegate-verifier
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: agegate.local
+    http:
+      paths:
+      - path: /sdk
+        pathType: Prefix
+        backend:
+          service:
+            name: agegate-verifier
+            port:
+              number: 8080

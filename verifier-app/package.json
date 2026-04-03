@@ -1,0 +1,11 @@
+{
+  "name": "agegate-verifier",
+  "version": "0.2.0",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.21.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
