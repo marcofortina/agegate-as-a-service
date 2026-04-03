@@ -1,0 +1,6 @@
+apiVersion: v2
+name: agegate-verifier
+description: Age Gate Verifier based on the EU Blueprint (mDoc + OID4VP)
+type: application
+version: 0.1.0
+appVersion: "1.0"

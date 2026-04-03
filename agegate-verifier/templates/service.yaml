@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agegate-verifier
+  labels:
+    app: agegate-verifier
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+  - port: {{ .Values.service.port }}
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: agegate-verifier
