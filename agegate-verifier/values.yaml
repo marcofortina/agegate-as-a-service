@@ -21,3 +21,10 @@ resources:
   requests:
     cpu: 100m
     memory: 256Mi
+
+persistence:
+  enabled: true
+  storageClass: "local-path"
+  accessMode: ReadWriteOnce
+  size: 1Gi
+  mountPath: /data
