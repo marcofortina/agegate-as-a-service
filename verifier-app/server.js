@@ -20,7 +20,7 @@ const pool = new Pool({
 // Redis rate limiting
 const redis = new Redis({ host: 'redis', port: 6379 });
 
-// Rate limit: 100 requests / minute per API key
+// Rate limit: 100 requests per minute per API key
 async function checkRateLimit(apiKey) {
   const key = `rate:${apiKey}`;
   const count = await redis.incr(key);
@@ -28,7 +28,7 @@ async function checkRateLimit(apiKey) {
   return count <= 100;
 }
 
-// Initialize TimescaleDB hypertable
+// Initialize hypertable
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS verifications (
@@ -75,7 +75,7 @@ app.post('/verify', async (req, res) => {
   });
 });
 
-// Full Dashboard
+// Dashboard - full admin interface
 app.get('/dashboard', async (req, res) => {
   const stats = await pool.query(`
     SELECT client_id, api_key, COUNT(*) as checks, MAX(timestamp) as last_check
@@ -91,7 +91,6 @@ app.get('/dashboard', async (req, res) => {
 <head>
   <meta charset="utf-8">
   <title>AgeGate Dashboard</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body { font-family: system-ui; background: #111; color: #0f0; padding: 20px; }
     .card { background: #222; padding: 20px; border-radius: 12px; margin: 15px 0; }
@@ -132,11 +131,6 @@ app.get('/dashboard', async (req, res) => {
     <button onclick="registerClient()">Add Client</button>
   </div>
 
-  <div class="card">
-    <h2>Verifications Trend (last 7 days)</h2>
-    <canvas id="chart" width="800" height="300"></canvas>
-  </div>
-
   <script>
     async function registerClient() {
       const clientId = document.getElementById('newClientId').value.trim();
@@ -152,29 +146,21 @@ app.get('/dashboard', async (req, res) => {
       location.reload();
     }
 
-    function revokeKey(apiKey) {
-      if (confirm('Revoke this API Key?')) {
-        alert('API Key revoked (demo)');
+    async function revokeKey(apiKey) {
+      if (!confirm('Revoke this API Key permanently?')) return;
+
+      const response = await fetch('/api/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: apiKey })
+      });
+      if (response.ok) {
+        alert('API Key revoked successfully');
         location.reload();
+      } else {
+        alert('Error revoking API Key');
       }
     }
-
-    // Simple chart (last 7 days - demo data for now)
-    window.onload = () => {
-      new Chart(document.getElementById('chart'), {
-        type: 'line',
-        data: {
-          labels: ['6 days ago', '5 days ago', '4 days ago', '3 days ago', '2 days ago', 'Yesterday', 'Today'],
-          datasets: [{
-            label: 'Verifications',
-            data: [42, 58, 67, 81, 95, 112, 138],
-            borderColor: '#0f0',
-            tension: 0.3
-          }]
-        },
-        options: { scales: { y: { beginAtZero: true } } }
-      });
-    };
   </script>
 
   <a href="/login">Logout</a>
@@ -190,6 +176,17 @@ app.post('/api/register', async (req, res) => {
 
   const apiKey = 'agk_' + Math.random().toString(36).substring(2, 18);
   res.json({ client_id, api_key: apiKey });
+});
+
+// Real API Key revocation
+app.post('/api/revoke', async (req, res) => {
+  const { api_key } = req.body;
+  if (!api_key) return res.status(400).json({ error: 'api_key is required' });
+
+  await pool.query('DELETE FROM verifications WHERE api_key = $1', [api_key]);
+  await redis.del(`rate:${api_key}`);
+
+  res.json({ status: 'success', message: 'API Key revoked' });
 });
 
 // Public onboarding page
@@ -209,4 +206,4 @@ app.get('/onboarding', (req, res) => {
 });
 
 const PORT = 8080;
-app.listen(PORT, () => console.log(`Age Gate Phase 12 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Age Gate Phase 13 running on port ${PORT}`));
