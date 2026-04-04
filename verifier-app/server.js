@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json());
 app.use('/sdk', express.static(path.join(__dirname)));
 
-// ==================== TIMESCALEDB ====================
+// Database connection
 const pool = new Pool({
   host: 'timescaledb',
   port: 5432,
@@ -15,7 +15,7 @@ const pool = new Pool({
   password: 'agegate2026',
 });
 
-// Create the hypertable (optimized for time-series verifications)
+// Initialize hypertable
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS verifications (
@@ -29,16 +29,18 @@ async function initDB() {
   await pool.query(`
     SELECT create_hypertable('verifications', 'timestamp', if_not_exists => TRUE);
   `);
-  console.log('✅ TimescaleDB hypertable ready');
+  console.log('TimescaleDB hypertable ready');
 }
 initDB().catch(console.error);
 
-// Verifier Blueprint UE
+// Verifier endpoint
 app.post('/verify', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const clientId = req.body.client_id || 'unknown';
 
-  if (!apiKey) return res.status(401).json({ status: "error", message: "Missing API Key" });
+  if (!apiKey) {
+    return res.status(401).json({ status: 'error', message: 'Missing API Key' });
+  }
 
   const timestamp = new Date().toISOString();
   await pool.query(
@@ -47,8 +49,8 @@ app.post('/verify', async (req, res) => {
   );
 
   res.json({
-    status: "success",
-    message: "Age ≥ 18 successfully verified (AGCOM double anonymity - UE Blueprint)",
+    status: 'success',
+    message: 'Age ≥ 18 successfully verified (AGCOM double anonymity - UE Blueprint)',
     verified: true,
     ageOver18: true,
     issuerTrusted: true,
@@ -56,7 +58,7 @@ app.post('/verify', async (req, res) => {
   });
 });
 
-// Dashboard (TimescaleDB)
+// Dashboard - full admin interface
 app.get('/dashboard', async (req, res) => {
   const result = await pool.query(`
     SELECT client_id, api_key, COUNT(*) as checks, MAX(timestamp) as last_check
@@ -67,20 +69,104 @@ app.get('/dashboard', async (req, res) => {
 
   const total = result.rows.reduce((sum, r) => sum + parseInt(r.checks), 0);
 
-  let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>AgeGate Dashboard</title>
-<style>body{font-family:system-ui;background:#111;color:#0f0;padding:20px}.card{background:#222;padding:20px;border-radius:12px;margin:15px 0} table{width:100%;border-collapse:collapse} th,td{padding:12px;border:1px solid #0a0}</style>
-</head><body>
-<h1>Age Gate as a Service - Dashboard</h1>
-<div class="card"><h2>Global Statistics</h2><p>Total verifications: <strong>${total}</strong></p></div>
-<div class="card"><h2>Clients</h2><table><tr><th>Client</th><th>API Key</th><th>Verifications</th><th>Last verification</th></tr>`;
+  let html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AgeGate Dashboard</title>
+  <style>
+    body { font-family: system-ui; background: #111; color: #0f0; padding: 20px; }
+    .card { background: #222; padding: 20px; border-radius: 12px; margin: 15px 0; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px; border: 1px solid #0a0; text-align: left; }
+    input, button { padding: 10px; margin: 5px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Age Gate as a Service - Dashboard</h1>
+
+  <div class="card">
+    <h2>Global Statistics</h2>
+    <p>Total verifications: <strong>${total}</strong></p>
+  </div>
+
+  <div class="card">
+    <h2>Clients</h2>
+    <table>
+      <tr><th>Client</th><th>API Key</th><th>Verifications</th><th>Last verification</th><th>Action</th></tr>`;
 
   result.rows.forEach(r => {
-    html += `<tr><td>${r.client_id}</td><td>${r.api_key}</td><td>${r.checks}</td><td>${r.last_check}</td></tr>`;
+    html += `<tr>
+      <td>${r.client_id}</td>
+      <td>${r.api_key}</td>
+      <td>${r.checks}</td>
+      <td>${r.last_check}</td>
+      <td><button onclick="revokeKey('${r.api_key}')">Revoke</button></td>
+    </tr>`;
   });
 
-  html += `</table></div><a href="/login">Logout</a></body></html>`;
+  html += `</table>
+  </div>
+
+  <div class="card">
+    <h2>Add New Client</h2>
+    <input id="newClientId" placeholder="Client ID (e.g. casino-italia.it)" style="width:320px">
+    <button onclick="registerClient()">Add Client</button>
+  </div>
+
+  <script>
+    async function registerClient() {
+      const clientId = document.getElementById('newClientId').value.trim();
+      if (!clientId) return alert('Client ID is required');
+
+      const response = await fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId })
+      });
+      const data = await response.json();
+      alert('API Key generated: ' + data.api_key);
+      location.reload();
+    }
+
+    function revokeKey(apiKey) {
+      if (confirm('Revoke this API Key?')) {
+        alert('API Key revoked (demo)');
+        location.reload();
+      }
+    }
+  </script>
+
+  <a href="/login">Logout</a>
+</body>
+</html>`;
   res.send(html);
 });
 
+// Register new client
+app.post('/api/register', async (req, res) => {
+  const { client_id } = req.body;
+  if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+
+  const apiKey = 'agk_' + Math.random().toString(36).substring(2, 18);
+  res.json({ client_id, api_key: apiKey });
+});
+
+// Public onboarding page
+app.get('/onboarding', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"><title>AgeGate Onboarding</title></head>
+    <body style="font-family:system-ui;background:#111;color:#0f0;padding:40px;">
+      <h1>How to integrate Age Gate</h1>
+      <p>1. Add this single line in your website:</p>
+      <pre>&lt;script src="http://agegate.local:${process.env.NODEPORT || 30452}/sdk/agegate-sdk.js"&gt;&lt;/script&gt;</pre>
+      <p>2. Use your personal API Key when calling the verification.</p>
+    </body>
+    </html>
+  `);
+});
+
 const PORT = 8080;
-app.listen(PORT, () => console.log(`🚀 Age Gate Phase 9 (TimescaleDB) on ${PORT}`));
+app.listen(PORT, () => console.log(`Age Gate Phase 10 running on port ${PORT}`));
