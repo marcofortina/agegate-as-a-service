@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json());
 app.use('/sdk', express.static(path.join(__dirname)));
 
-// Configuration
+// Configuration from environment variables
 const PORT = process.env.PORT || 8080;
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS || 'agegate2026';
@@ -28,7 +28,7 @@ const redis = new Redis({
   port: parseInt(process.env.REDIS_PORT || '6379'),
 });
 
-// Rate limit
+// Rate limit: 100 requests per minute per API key
 async function checkRateLimit(apiKey) {
   const key = `rate:${apiKey}`;
   const count = await redis.incr(key);
@@ -54,7 +54,16 @@ async function initDB() {
 }
 initDB().catch(console.error);
 
-// Verifier
+// Admin basic auth helper
+function isAdmin(req) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Basic ')) return false;
+  const credentials = Buffer.from(auth.split(' ')[1], 'base64').toString();
+  const [user, pass] = credentials.split(':');
+  return user === ADMIN_USER && pass === ADMIN_PASS;
+}
+
+// Verifier endpoint
 app.post('/verify', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const clientId = req.body.client_id || 'unknown';
@@ -176,14 +185,6 @@ app.get('/dashboard', async (req, res) => {
 });
 
 // Admin endpoints
-function isAdmin(req) {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Basic ')) return false;
-  const credentials = Buffer.from(auth.split(' ')[1], 'base64').toString();
-  const [user, pass] = credentials.split(':');
-  return user === ADMIN_USER && pass === ADMIN_PASS;
-}
-
 app.post('/api/register', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { client_id } = req.body;
@@ -204,6 +205,20 @@ app.post('/api/revoke', async (req, res) => {
   res.json({ status: 'success', message: 'API Key revoked' });
 });
 
+// Health check
+app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
+
+// Readiness probe
+app.get('/ready', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    await redis.ping();
+    res.status(200).json({ status: 'ready' });
+  } catch (err) {
+    res.status(503).json({ status: 'not ready' });
+  }
+});
+
 // Public onboarding
 app.get('/onboarding', (req, res) => {
   res.send(`
@@ -220,4 +235,4 @@ app.get('/onboarding', (req, res) => {
   `);
 });
 
-app.listen(PORT, () => console.log(`Age Gate Phase 15 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Age Gate Phase 16 running on port ${PORT}`));
