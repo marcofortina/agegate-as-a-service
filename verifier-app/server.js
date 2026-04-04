@@ -1,12 +1,14 @@
 const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
+const Redis = require('ioredis');
+
 const app = express();
 
 app.use(express.json());
 app.use('/sdk', express.static(path.join(__dirname)));
 
-// Database connection
+// PostgreSQL + TimescaleDB
 const pool = new Pool({
   host: 'timescaledb',
   port: 5432,
@@ -14,6 +16,17 @@ const pool = new Pool({
   user: 'postgres',
   password: 'agegate2026',
 });
+
+// Redis for distributed rate limiting
+const redis = new Redis({ host: 'redis', port: 6379 });
+
+// Rate limit: 100 requests per minute per API key
+async function checkRateLimit(apiKey) {
+  const key = `rate:${apiKey}`;
+  const count = await redis.incr(key);
+  if (count === 1) await redis.expire(key, 60);
+  return count <= 100;
+}
 
 // Initialize hypertable
 async function initDB() {
@@ -42,6 +55,10 @@ app.post('/verify', async (req, res) => {
     return res.status(401).json({ status: 'error', message: 'Missing API Key' });
   }
 
+  if (!await checkRateLimit(apiKey)) {
+    return res.status(429).json({ status: 'error', message: 'Rate limit exceeded (100 requests/min)' });
+  }
+
   const timestamp = new Date().toISOString();
   await pool.query(
     `INSERT INTO verifications (client_id, api_key, timestamp, verified) VALUES ($1, $2, $3, $4)`,
@@ -58,7 +75,7 @@ app.post('/verify', async (req, res) => {
   });
 });
 
-// Dashboard - full admin interface
+// Dashboard
 app.get('/dashboard', async (req, res) => {
   const result = await pool.query(`
     SELECT client_id, api_key, COUNT(*) as checks, MAX(timestamp) as last_check
@@ -169,4 +186,4 @@ app.get('/onboarding', (req, res) => {
 });
 
 const PORT = 8080;
-app.listen(PORT, () => console.log(`Age Gate Phase 10 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Age Gate Phase 11 running on port ${PORT}`));
