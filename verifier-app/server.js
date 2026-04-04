@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json());
 app.use('/sdk', express.static(path.join(__dirname)));
 
-// Configuration from environment variables
+// Configuration
 const PORT = process.env.PORT || 8080;
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS || 'agegate2026';
@@ -43,6 +43,7 @@ async function initDB() {
       id SERIAL PRIMARY KEY,
       client_id TEXT NOT NULL,
       api_key TEXT NOT NULL,
+      threshold INTEGER NOT NULL DEFAULT 18,
       timestamp TIMESTAMPTZ NOT NULL,
       verified BOOLEAN NOT NULL
     );
@@ -63,10 +64,11 @@ function isAdmin(req) {
   return user === ADMIN_USER && pass === ADMIN_PASS;
 }
 
-// Verifier endpoint
+// Verifier endpoint - support for different thresholds (18/21/25)
 app.post('/verify', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const clientId = req.body.client_id || 'unknown';
+  const requestedThreshold = parseInt(req.body.threshold) || 18;
 
   if (!apiKey) {
     return res.status(401).json({ status: 'error', message: 'Missing API Key' });
@@ -78,16 +80,17 @@ app.post('/verify', async (req, res) => {
 
   const timestamp = new Date().toISOString();
   await pool.query(
-    `INSERT INTO verifications (client_id, api_key, timestamp, verified) VALUES ($1, $2, $3, $4)`,
-    [clientId, apiKey, timestamp, true]
+    `INSERT INTO verifications (client_id, api_key, threshold, timestamp, verified) VALUES ($1, $2, $3, $4, $5)`,
+    [clientId, apiKey, requestedThreshold, timestamp, true]
   );
 
   res.json({
     status: 'success',
-    message: 'Age ≥ 18 successfully verified (AGCOM double anonymity - UE Blueprint)',
+    message: `Age ≥ ${requestedThreshold} successfully verified (AGCOM double anonymity - UE Blueprint)`,
     verified: true,
-    ageOver18: true,
+    ageOverThreshold: true,
     issuerTrusted: true,
+    threshold: requestedThreshold,
     timestamp
   });
 });
@@ -205,10 +208,9 @@ app.post('/api/revoke', async (req, res) => {
   res.json({ status: 'success', message: 'API Key revoked' });
 });
 
-// Health check
+// Health and readiness
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 
-// Readiness probe
 app.get('/ready', async (req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -235,4 +237,4 @@ app.get('/onboarding', (req, res) => {
   `);
 });
 
-app.listen(PORT, () => console.log(`Age Gate Phase 16 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Age Gate Phase 17 running on port ${PORT}`));
