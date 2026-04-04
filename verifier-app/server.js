@@ -28,6 +28,18 @@ async function checkRateLimit(apiKey) {
   return count <= 100;
 }
 
+// Basic auth for admin endpoints
+const ADMIN_USER = 'admin';
+const ADMIN_PASS = 'agegate2026';
+
+function isAdmin(req) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Basic ')) return false;
+  const credentials = Buffer.from(auth.split(' ')[1], 'base64').toString();
+  const [user, pass] = credentials.split(':');
+  return user === ADMIN_USER && pass === ADMIN_PASS;
+}
+
 // Initialize hypertable
 async function initDB() {
   await pool.query(`
@@ -46,7 +58,7 @@ async function initDB() {
 }
 initDB().catch(console.error);
 
-// Verifier endpoint
+// Verifier endpoint (public, only needs API key)
 app.post('/verify', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const clientId = req.body.client_id || 'unknown';
@@ -75,8 +87,12 @@ app.post('/verify', async (req, res) => {
   });
 });
 
-// Dashboard - full admin interface
+// Dashboard (protected)
 app.get('/dashboard', async (req, res) => {
+  if (!isAdmin(req)) {
+    return res.status(401).send('Unauthorized');
+  }
+
   const stats = await pool.query(`
     SELECT client_id, api_key, COUNT(*) as checks, MAX(timestamp) as last_check
     FROM verifications
@@ -148,7 +164,6 @@ app.get('/dashboard', async (req, res) => {
 
     async function revokeKey(apiKey) {
       if (!confirm('Revoke this API Key permanently?')) return;
-
       const response = await fetch('/api/revoke', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -169,8 +184,10 @@ app.get('/dashboard', async (req, res) => {
   res.send(html);
 });
 
-// Register new client
-app.post('/api/register', async (req, res) => {
+// Protected admin endpoints
+app.post('/api/register', (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+
   const { client_id } = req.body;
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
 
@@ -178,8 +195,9 @@ app.post('/api/register', async (req, res) => {
   res.json({ client_id, api_key: apiKey });
 });
 
-// Real API Key revocation
 app.post('/api/revoke', async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'api_key is required' });
 
@@ -206,4 +224,4 @@ app.get('/onboarding', (req, res) => {
 });
 
 const PORT = 8080;
-app.listen(PORT, () => console.log(`Age Gate Phase 13 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Age Gate Phase 14 running on port ${PORT}`));
