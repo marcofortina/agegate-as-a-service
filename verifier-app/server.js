@@ -8,36 +8,32 @@ const app = express();
 app.use(express.json());
 app.use('/sdk', express.static(path.join(__dirname)));
 
+// Configuration
+const PORT = process.env.PORT || 8080;
+const ADMIN_USER = process.env.ADMIN_USER || 'admin';
+const ADMIN_PASS = process.env.ADMIN_PASS || 'agegate2026';
+
 // Database
 const pool = new Pool({
-  host: 'timescaledb',
-  port: 5432,
-  database: 'agegate',
-  user: 'postgres',
-  password: 'agegate2026',
+  host: process.env.TIMESCALEDB_HOST || 'timescaledb',
+  port: parseInt(process.env.TIMESCALEDB_PORT || '5432'),
+  database: process.env.TIMESCALEDB_DB || 'agegate',
+  user: process.env.TIMESCALEDB_USER || 'postgres',
+  password: process.env.TIMESCALEDB_PASSWORD || 'agegate2026',
 });
 
-// Redis rate limiting
-const redis = new Redis({ host: 'redis', port: 6379 });
+// Redis
+const redis = new Redis({
+  host: process.env.REDIS_HOST || 'redis',
+  port: parseInt(process.env.REDIS_PORT || '6379'),
+});
 
-// Rate limit: 100 requests per minute per API key
+// Rate limit
 async function checkRateLimit(apiKey) {
   const key = `rate:${apiKey}`;
   const count = await redis.incr(key);
   if (count === 1) await redis.expire(key, 60);
   return count <= 100;
-}
-
-// Basic auth for admin endpoints
-const ADMIN_USER = 'admin';
-const ADMIN_PASS = 'agegate2026';
-
-function isAdmin(req) {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Basic ')) return false;
-  const credentials = Buffer.from(auth.split(' ')[1], 'base64').toString();
-  const [user, pass] = credentials.split(':');
-  return user === ADMIN_USER && pass === ADMIN_PASS;
 }
 
 // Initialize hypertable
@@ -58,7 +54,7 @@ async function initDB() {
 }
 initDB().catch(console.error);
 
-// Verifier endpoint (public, only needs API key)
+// Verifier
 app.post('/verify', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const clientId = req.body.client_id || 'unknown';
@@ -87,11 +83,9 @@ app.post('/verify', async (req, res) => {
   });
 });
 
-// Dashboard (protected)
+// Dashboard
 app.get('/dashboard', async (req, res) => {
-  if (!isAdmin(req)) {
-    return res.status(401).send('Unauthorized');
-  }
+  if (!isAdmin(req)) return res.status(401).send('Unauthorized');
 
   const stats = await pool.query(`
     SELECT client_id, api_key, COUNT(*) as checks, MAX(timestamp) as last_check
@@ -117,12 +111,10 @@ app.get('/dashboard', async (req, res) => {
 </head>
 <body>
   <h1>Age Gate as a Service - Dashboard</h1>
-
   <div class="card">
     <h2>Global Statistics</h2>
     <p>Total verifications: <strong>${total}</strong></p>
   </div>
-
   <div class="card">
     <h2>Clients</h2>
     <table>
@@ -151,7 +143,6 @@ app.get('/dashboard', async (req, res) => {
     async function registerClient() {
       const clientId = document.getElementById('newClientId').value.trim();
       if (!clientId) return alert('Client ID is required');
-
       const response = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -184,10 +175,17 @@ app.get('/dashboard', async (req, res) => {
   res.send(html);
 });
 
-// Protected admin endpoints
+// Admin endpoints
+function isAdmin(req) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Basic ')) return false;
+  const credentials = Buffer.from(auth.split(' ')[1], 'base64').toString();
+  const [user, pass] = credentials.split(':');
+  return user === ADMIN_USER && pass === ADMIN_PASS;
+}
+
 app.post('/api/register', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
-
   const { client_id } = req.body;
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
 
@@ -197,7 +195,6 @@ app.post('/api/register', (req, res) => {
 
 app.post('/api/revoke', async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
-
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'api_key is required' });
 
@@ -207,7 +204,7 @@ app.post('/api/revoke', async (req, res) => {
   res.json({ status: 'success', message: 'API Key revoked' });
 });
 
-// Public onboarding page
+// Public onboarding
 app.get('/onboarding', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -223,5 +220,4 @@ app.get('/onboarding', (req, res) => {
   `);
 });
 
-const PORT = 8080;
-app.listen(PORT, () => console.log(`Age Gate Phase 14 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Age Gate Phase 15 running on port ${PORT}`));
