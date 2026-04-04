@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json());
 app.use('/sdk', express.static(path.join(__dirname)));
 
-// PostgreSQL + TimescaleDB
+// Database
 const pool = new Pool({
   host: 'timescaledb',
   port: 5432,
@@ -17,10 +17,10 @@ const pool = new Pool({
   password: 'agegate2026',
 });
 
-// Redis for distributed rate limiting
+// Redis rate limiting
 const redis = new Redis({ host: 'redis', port: 6379 });
 
-// Rate limit: 100 requests per minute per API key
+// Rate limit: 100 requests / minute per API key
 async function checkRateLimit(apiKey) {
   const key = `rate:${apiKey}`;
   const count = await redis.incr(key);
@@ -28,7 +28,7 @@ async function checkRateLimit(apiKey) {
   return count <= 100;
 }
 
-// Initialize hypertable
+// Initialize TimescaleDB hypertable
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS verifications (
@@ -75,22 +75,23 @@ app.post('/verify', async (req, res) => {
   });
 });
 
-// Dashboard
+// Full Dashboard
 app.get('/dashboard', async (req, res) => {
-  const result = await pool.query(`
+  const stats = await pool.query(`
     SELECT client_id, api_key, COUNT(*) as checks, MAX(timestamp) as last_check
     FROM verifications
     GROUP BY client_id, api_key
     ORDER BY checks DESC
   `);
 
-  const total = result.rows.reduce((sum, r) => sum + parseInt(r.checks), 0);
+  const total = stats.rows.reduce((sum, r) => sum + parseInt(r.checks), 0);
 
   let html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <title>AgeGate Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body { font-family: system-ui; background: #111; color: #0f0; padding: 20px; }
     .card { background: #222; padding: 20px; border-radius: 12px; margin: 15px 0; }
@@ -112,7 +113,7 @@ app.get('/dashboard', async (req, res) => {
     <table>
       <tr><th>Client</th><th>API Key</th><th>Verifications</th><th>Last verification</th><th>Action</th></tr>`;
 
-  result.rows.forEach(r => {
+  stats.rows.forEach(r => {
     html += `<tr>
       <td>${r.client_id}</td>
       <td>${r.api_key}</td>
@@ -129,6 +130,11 @@ app.get('/dashboard', async (req, res) => {
     <h2>Add New Client</h2>
     <input id="newClientId" placeholder="Client ID (e.g. casino-italia.it)" style="width:320px">
     <button onclick="registerClient()">Add Client</button>
+  </div>
+
+  <div class="card">
+    <h2>Verifications Trend (last 7 days)</h2>
+    <canvas id="chart" width="800" height="300"></canvas>
   </div>
 
   <script>
@@ -152,6 +158,23 @@ app.get('/dashboard', async (req, res) => {
         location.reload();
       }
     }
+
+    // Simple chart (last 7 days - demo data for now)
+    window.onload = () => {
+      new Chart(document.getElementById('chart'), {
+        type: 'line',
+        data: {
+          labels: ['6 days ago', '5 days ago', '4 days ago', '3 days ago', '2 days ago', 'Yesterday', 'Today'],
+          datasets: [{
+            label: 'Verifications',
+            data: [42, 58, 67, 81, 95, 112, 138],
+            borderColor: '#0f0',
+            tension: 0.3
+          }]
+        },
+        options: { scales: { y: { beginAtZero: true } } }
+      });
+    };
   </script>
 
   <a href="/login">Logout</a>
@@ -186,4 +209,4 @@ app.get('/onboarding', (req, res) => {
 });
 
 const PORT = 8080;
-app.listen(PORT, () => console.log(`Age Gate Phase 11 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Age Gate Phase 12 running on port ${PORT}`));
