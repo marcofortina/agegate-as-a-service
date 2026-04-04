@@ -12,6 +12,7 @@ app.use('/sdk', express.static(path.join(__dirname)));
 const PORT = process.env.PORT || 8080;
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS || 'agegate2026';
+const PUBLIC_URL = process.env.PUBLIC_URL || `http://agegate.local:${process.env.NODEPORT || 30452}`;
 
 // Database
 const pool = new Pool({
@@ -64,7 +65,7 @@ function isAdmin(req) {
   return user === ADMIN_USER && pass === ADMIN_PASS;
 }
 
-// Verifier endpoint - support for different thresholds (18/21/25)
+// Verifier endpoint
 app.post('/verify', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const clientId = req.body.client_id || 'unknown';
@@ -230,11 +231,11 @@ app.get('/onboarding', (req, res) => {
     <body style="font-family:system-ui;background:#111;color:#0f0;padding:40px;">
       <h1>How to integrate Age Gate</h1>
       <p>1. Add this single line in your website:</p>
-      <pre>&lt;script src="http://agegate.local:${process.env.NODEPORT || 30452}/sdk/agegate-sdk.js"&gt;&lt;/script&gt;</pre>
+      <pre>&lt;script src="${PUBLIC_URL}/sdk/agegate-sdk.js"&gt;&lt;/script&gt;</pre>
       <p>2. Use your personal API Key when calling the verification.</p>
     </body>
     </html>
   `);
 });
 
-app.listen(PORT, () => console.log(`Age Gate Phase 17 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Age Gate Phase 18 running on port ${PORT}`));
