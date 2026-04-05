@@ -2,8 +2,36 @@ const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
 const Redis = require('ioredis');
+const pino = require('pino');
+const prometheus = require('prom-client');
 
 const app = express();
+
+// Structured logger
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  timestamp: pino.stdTimeFunctions.isoTime,
+  redact: ['req.headers.authorization', 'apiKey']
+});
+
+// Prometheus metrics
+const register = new prometheus.Registry();
+prometheus.collectDefaultMetrics({ register });
+
+const verificationCounter = new prometheus.Counter({
+  name: 'agegate_verifications_total',
+  help: 'Total number of age verifications',
+  labelNames: ['client_id', 'threshold']
+});
+
+const verificationDuration = new prometheus.Histogram({
+  name: 'agegate_verification_duration_seconds',
+  help: 'Verification duration in seconds',
+  labelNames: ['client_id']
+});
+
+register.registerMetric(verificationCounter);
+register.registerMetric(verificationDuration);
 
 app.use(express.json());
 app.use('/sdk', express.static(path.join(__dirname)));
@@ -29,17 +57,6 @@ const redis = new Redis({
   port: parseInt(process.env.REDIS_PORT || '6379'),
 });
 
-// Structured logging
-function log(level, message, meta = {}) {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    level,
-    message,
-    ...meta
-  };
-  console.log(JSON.stringify(entry));
-}
-
 // Rate limit
 async function checkRateLimit(apiKey) {
   const key = `rate:${apiKey}`;
@@ -48,7 +65,7 @@ async function checkRateLimit(apiKey) {
   return count <= 100;
 }
 
-// Initialize hypertable
+// Initialize DB
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS verifications (
@@ -63,9 +80,9 @@ async function initDB() {
   await pool.query(`
     SELECT create_hypertable('verifications', 'timestamp', if_not_exists => TRUE);
   `);
-  log('info', 'TimescaleDB hypertable ready');
+  logger.info('TimescaleDB hypertable ready');
 }
-initDB().catch(err => log('error', 'Database initialization failed', { error: err.message }));
+initDB().catch(err => logger.error(err, 'Database initialization failed'));
 
 // Admin auth helper
 function isAdmin(req) {
@@ -81,39 +98,37 @@ app.post('/verify', async (req, res) => {
   const start = Date.now();
   const apiKey = req.headers['x-api-key'];
   const clientId = req.body.client_id || 'unknown';
-  const requestedThreshold = parseInt(req.body.threshold) || 18;
+  const threshold = parseInt(req.body.threshold) || 18;
 
   if (!apiKey) {
-    log('warn', 'Missing API Key', { clientId });
+    logger.warn({ clientId }, 'Missing API Key');
     return res.status(401).json({ status: 'error', message: 'Missing API Key' });
   }
 
   if (!await checkRateLimit(apiKey)) {
-    log('warn', 'Rate limit exceeded', { apiKey: apiKey.substring(0, 8) + '...' });
+    logger.warn({ apiKey: apiKey.substring(0, 8) + '...' }, 'Rate limit exceeded');
     return res.status(429).json({ status: 'error', message: 'Rate limit exceeded (100 requests/min)' });
   }
 
   const timestamp = new Date().toISOString();
   await pool.query(
     `INSERT INTO verifications (client_id, api_key, threshold, timestamp, verified) VALUES ($1, $2, $3, $4, $5)`,
-    [clientId, apiKey, requestedThreshold, timestamp, true]
+    [clientId, apiKey, threshold, timestamp, true]
   );
 
-  const duration = Date.now() - start;
-  log('info', 'Verification successful', {
-    clientId,
-    apiKey: apiKey.substring(0, 8) + '...',
-    threshold: requestedThreshold,
-    durationMs: duration
-  });
+  const duration = (Date.now() - start) / 1000;
+  logger.info({ clientId, threshold, durationMs: Math.round(duration * 1000) }, 'Verification successful');
+
+  verificationCounter.inc({ client_id: clientId, threshold });
+  verificationDuration.observe({ client_id: clientId }, duration);
 
   res.json({
     status: 'success',
-    message: `Age ≥ ${requestedThreshold} successfully verified (AGCOM double anonymity - UE Blueprint)`,
+    message: `Age ≥ ${threshold} successfully verified (AGCOM double anonymity - UE Blueprint)`,
     verified: true,
     ageOverThreshold: true,
     issuerTrusted: true,
-    threshold: requestedThreshold,
+    threshold,
     timestamp
   });
 });
@@ -231,6 +246,13 @@ app.post('/api/revoke', async (req, res) => {
   res.json({ status: 'success', message: 'API Key revoked' });
 });
 
+// Metrics
+app.get('/metrics', async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).send('Unauthorized');
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});
+
 // Health and readiness
 app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
 
@@ -260,4 +282,14 @@ app.get('/onboarding', (req, res) => {
   `);
 });
 
-app.listen(PORT, () => console.log(`Age Gate Phase 19 running on port ${PORT}`));
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM received - shutting down gracefully');
+  app.close(() => {
+    pool.end();
+    redis.quit();
+    process.exit(0);
+  });
+});
+
+app.listen(PORT, () => logger.info(`Age Gate Phase 20 running on port ${PORT}`));
