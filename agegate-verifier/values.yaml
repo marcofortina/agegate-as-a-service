@@ -1,4 +1,4 @@
-replicaCount: 1
+replicaCount: 3
 
 image:
   repository: agegate-verifier
@@ -19,12 +19,12 @@ resources:
     cpu: 500m
     memory: 512Mi
   requests:
-    cpu: 100m
+    cpu: 200m
     memory: 256Mi
 
 persistence:
   enabled: true
   storageClass: "local-path"
   accessMode: ReadWriteOnce
-  size: 1Gi
+  size: 5Gi
   mountPath: /data

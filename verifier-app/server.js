@@ -29,7 +29,18 @@ const redis = new Redis({
   port: parseInt(process.env.REDIS_PORT || '6379'),
 });
 
-// Rate limit: 100 requests per minute per API key
+// Structured logging
+function log(level, message, meta = {}) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...meta
+  };
+  console.log(JSON.stringify(entry));
+}
+
+// Rate limit
 async function checkRateLimit(apiKey) {
   const key = `rate:${apiKey}`;
   const count = await redis.incr(key);
@@ -52,11 +63,11 @@ async function initDB() {
   await pool.query(`
     SELECT create_hypertable('verifications', 'timestamp', if_not_exists => TRUE);
   `);
-  console.log('TimescaleDB hypertable ready');
+  log('info', 'TimescaleDB hypertable ready');
 }
-initDB().catch(console.error);
+initDB().catch(err => log('error', 'Database initialization failed', { error: err.message }));
 
-// Admin basic auth helper
+// Admin auth helper
 function isAdmin(req) {
   const auth = req.headers.authorization;
   if (!auth || !auth.startsWith('Basic ')) return false;
@@ -65,17 +76,20 @@ function isAdmin(req) {
   return user === ADMIN_USER && pass === ADMIN_PASS;
 }
 
-// Verifier endpoint
+// Verifier
 app.post('/verify', async (req, res) => {
+  const start = Date.now();
   const apiKey = req.headers['x-api-key'];
   const clientId = req.body.client_id || 'unknown';
   const requestedThreshold = parseInt(req.body.threshold) || 18;
 
   if (!apiKey) {
+    log('warn', 'Missing API Key', { clientId });
     return res.status(401).json({ status: 'error', message: 'Missing API Key' });
   }
 
   if (!await checkRateLimit(apiKey)) {
+    log('warn', 'Rate limit exceeded', { apiKey: apiKey.substring(0, 8) + '...' });
     return res.status(429).json({ status: 'error', message: 'Rate limit exceeded (100 requests/min)' });
   }
 
@@ -84,6 +98,14 @@ app.post('/verify', async (req, res) => {
     `INSERT INTO verifications (client_id, api_key, threshold, timestamp, verified) VALUES ($1, $2, $3, $4, $5)`,
     [clientId, apiKey, requestedThreshold, timestamp, true]
   );
+
+  const duration = Date.now() - start;
+  log('info', 'Verification successful', {
+    clientId,
+    apiKey: apiKey.substring(0, 8) + '...',
+    threshold: requestedThreshold,
+    durationMs: duration
+  });
 
   res.json({
     status: 'success',
@@ -238,4 +260,4 @@ app.get('/onboarding', (req, res) => {
   `);
 });
 
-app.listen(PORT, () => console.log(`Age Gate Phase 18 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Age Gate Phase 19 running on port ${PORT}`));
