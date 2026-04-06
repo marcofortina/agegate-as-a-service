@@ -16,15 +16,20 @@ ingress:
 
 resources:
   limits:
-    cpu: 500m
-    memory: 512Mi
+    cpu: 800m
+    memory: 768Mi
   requests:
-    cpu: 200m
-    memory: 256Mi
+    cpu: 300m
+    memory: 384Mi
 
 persistence:
   enabled: true
   storageClass: "local-path"
   accessMode: ReadWriteOnce
-  size: 5Gi
+  size: 10Gi
   mountPath: /data
+
+# Environment variables
+env:
+  LOG_LEVEL: info
+  PUBLIC_URL: "http://agegate.local"
