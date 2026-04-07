@@ -68,9 +68,21 @@ const redis = new Redis({
 // Rate limit
 async function checkRateLimit(apiKey) {
   const key = `rate:${apiKey}`;
-  const count = await redis.incr(key);
-  if (count === 1) await redis.expire(key, 60);
-  return count <= 100;
+  const multi = redis.multi();
+  multi.incr(key);
+  multi.ttl(key);
+  const [countRes, ttlRes] = await multi.exec();
+
+  const count = countRes[1];
+  const ttl = ttlRes[1];
+
+  if (ttl === -1) await redis.expire(key, 60);
+
+  if (count > 100) {
+    await redis.decr(key);
+    return false;
+  }
+  return true;
 }
 
 // Initialize DB
