@@ -29,7 +29,19 @@ persistence:
   size: 10Gi
   mountPath: /data
 
-# Environment variables
+# === ALL ENVIRONMENT VARIABLES FOR K3s LAB ===
 env:
   LOG_LEVEL: info
   PUBLIC_URL: "http://agegate.local"
+  PORT: "8080"
+  ADMIN_USER: "admin"
+  # ADMIN_PASS: set via secret (never in values!)
+  TIMESCALEDB_HOST: "timescaledb"
+  TIMESCALEDB_PORT: "5432"
+  TIMESCALEDB_DB: "agegate"
+  TIMESCALEDB_USER: "postgres"
+  # TIMESCALEDB_PASSWORD: set via secret
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  VERIFIER_BACKEND: "mock" # or "eidas" in future
+  ALLOWED_ORIGINS: "http://agegate.local,https://yourdomain.it"

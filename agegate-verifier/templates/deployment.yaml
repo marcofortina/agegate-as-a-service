@@ -18,14 +18,42 @@ spec:
       - name: verifier
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+        envFrom:
+          - secretRef:
+              name: agegate-secrets
+
+        env:
+          - name: VERIFIER_BACKEND
+            value: "{{ .Values.env.VERIFIER_BACKEND }}"
+          - name: ALLOWED_ORIGINS
+            value: "{{ .Values.env.ALLOWED_ORIGINS }}"
+
         ports:
-        - containerPort: 8080
+          - containerPort: 8080
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
+
         volumeMounts:
-        - name: data
-          mountPath: /data
+          - name: data
+            mountPath: /data
+
       volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: agegate-data
+        - name: data
+          persistentVolumeClaim:
+            claimName: agegate-data
