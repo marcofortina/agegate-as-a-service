@@ -9,6 +9,7 @@ jobs:
         with:
           node-version: 20
       - run: npm install --prefix verifier-app
+      - run: cp .env.example verifier-app/.env
       - run: npm test --prefix verifier-app || echo "No tests yet"
       - uses: azure/setup-helm@v4
       - run: helm lint ./agegate-verifier
