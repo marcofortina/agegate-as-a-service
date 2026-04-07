@@ -28,14 +28,11 @@ kubectl create ns agegate
 kubectl apply -f redis.yaml
 kubectl apply -f timescaledb.yaml
 
-kubectl create secret generic agegate-secrets \
-  --from-literal=ADMIN_PASS=change-me \
-  --from-literal=TIMESCALEDB_PASSWORD=change-me \
-  -n agegate
-
 helm upgrade --install agegate-verifier ./agegate-verifier \
   --namespace agegate \
-  --values agegate-verifier/values.yaml
+  --values agegate-verifier/values.yaml \
+  --set env.TIMESCALEDB_PASSWORD=YOUR_DB_PASSWORD \
+  --set env.ADMIN_PASS=YOUR_ADMIN_PASSWORD
 ```
 
 ---
@@ -47,6 +44,13 @@ helm upgrade --install agegate-verifier ./agegate-verifier \
 * 📡 API: `doc/api.md`
 
 👉 For a detailed step-by-step setup (health checks, troubleshooting, etc.), see **`doc/install.md`**
+
+---
+
+## Development
+
+See [doc/development.md](doc/development.md) for full setup, linting, testing, and K3s lab workflow.
+(Includes notes on secrets, passwords, and CI/CD workflow.)
 
 ---
 
