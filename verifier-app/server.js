@@ -7,6 +7,15 @@ const prometheus = require('prom-client');
 
 const app = express();
 
+// Security middleware (English comments)
+const helmet = require('helmet');
+const cors = require('cors');
+const { z } = require('zod');
+
+app.use(helmet());                    // Security headers
+app.use(cors({ origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*' }));
+app.use(express.json({ limit: '10kb' })); // Prevent large payloads
+
 // Structured logger
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
@@ -113,6 +122,12 @@ function isAdmin(req) {
   return user === ADMIN_USER && pass === ADMIN_PASS;
 }
 
+// Input validation schema
+const verifySchema = z.object({
+  client_id: z.string().min(3).max(100),
+  threshold: z.number().int().min(18).max(25).default(18)
+});
+
 // Verifier
 app.post('/verify', async (req, res) => {
   const start = Date.now();
@@ -130,43 +145,49 @@ app.post('/verify', async (req, res) => {
     return res.status(429).json({ status: 'error', message: 'Rate limit exceeded (100 requests/min)' });
   }
 
-  // === REAL AGE VERIFICATION ===
-  let verified = true;
-  const backend = process.env.VERIFIER_BACKEND || 'mock';
+  try {
+    const validated = verifySchema.parse(req.body);
 
-  if (backend === 'mock') {
-    // realistic simulation for testing
-    verified = Math.random() * 100 >= (threshold - 5); // ~5% false negatives for testing
-  } else if (backend === 'eidas') {
-    // TODO: OID4VP / mDoc integration (future)
-    verified = true; // placeholder
+    // === REAL AGE VERIFICATION ===
+    let verified = true;
+    const backend = process.env.VERIFIER_BACKEND || 'mock';
+
+    if (backend === 'mock') {
+      // realistic simulation for testing
+      verified = Math.random() * 100 >= (threshold - 5); // ~5% false negatives for testing
+    } else if (backend === 'eidas') {
+      // TODO: OID4VP / mDoc integration (future)
+      verified = true; // placeholder
+    }
+
+    const timestamp = new Date().toISOString();
+    await pool.query(
+      `INSERT INTO verifications (client_id, api_key, threshold, timestamp, verified) VALUES ($1, $2, $3, $4, $5)`,
+      [clientId, apiKey, threshold, timestamp, verified]
+    );
+
+    const duration = (Date.now() - start) / 1000;
+
+    logger.info({ clientId, threshold, verified, backend, durationMs: Math.round(duration * 1000) }, 'Verification completed');
+
+    verificationCounter.inc({ client_id: clientId, threshold });
+    verificationDuration.observe({ client_id: clientId }, duration);
+
+    res.json({
+      status: 'success',
+      message: verified
+        ? `Age ≥ ${threshold} successfully verified (AGCOM double anonymity - UE Blueprint)`
+        : `Age verification failed - user is under ${threshold}`,
+      verified,
+      ageOverThreshold: verified,
+      issuerTrusted: true,
+      threshold,
+      timestamp,
+      proofType: backend === 'eidas' ? 'eIDAS2.0' : 'mock'
+    });
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: 'Invalid input', details: err.errors });
   }
-
-  const timestamp = new Date().toISOString();
-  await pool.query(
-    `INSERT INTO verifications (client_id, api_key, threshold, timestamp, verified) VALUES ($1, $2, $3, $4, $5)`,
-    [clientId, apiKey, threshold, timestamp, verified]
-  );
-
-  const duration = (Date.now() - start) / 1000;
-
-  logger.info({ clientId, threshold, verified, backend, durationMs: Math.round(duration * 1000) }, 'Verification completed');
-
-  verificationCounter.inc({ client_id: clientId, threshold });
-  verificationDuration.observe({ client_id: clientId }, duration);
-
-  res.json({
-    status: 'success',
-    message: verified
-      ? `Age ≥ ${threshold} successfully verified (AGCOM double anonymity - UE Blueprint)`
-      : `Age verification failed - user is under ${threshold}`,
-    verified,
-    ageOverThreshold: verified,
-    issuerTrusted: true,
-    threshold,
-    timestamp,
-    proofType: backend === 'eidas' ? 'eIDAS2.0' : 'mock'
-  });
 });
 
 // Dashboard
