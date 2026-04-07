@@ -45,6 +45,26 @@ register.registerMetric(verificationDuration);
 app.use(express.json());
 app.use('/sdk', express.static(path.join(__dirname)));
 
+// OpenAPI / Swagger
+const swaggerJsdoc = require('swagger-jsdoc');
+const swaggerUi = require('swagger-ui-express');
+
+const swaggerOptions = {
+  definition: {
+    openapi: '3.1.0',
+    info: {
+      title: 'AgeGate as a Service',
+      version: '0.3.1',
+      description: 'EU Blueprint compliant age verification (double anonymity)'
+    },
+    servers: [{ url: process.env.PUBLIC_URL }]
+  },
+  apis: ['./server.js']
+};
+
+const swaggerSpec = swaggerJsdoc(swaggerOptions);
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
 // Configuration
 const PORT = process.env.PORT || 8080;
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
