@@ -1,0 +1,4 @@
+enabled: true
+replicaCount: 1
+port: 5432
+storage: 5Gi

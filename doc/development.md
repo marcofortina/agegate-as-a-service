@@ -32,23 +32,18 @@ Coverage report is generated in `verifier-app/coverage/`.
 
 ## K3s Lab Workflow
 
-1. Create namespace:
-
-```bash
-kubectl create ns agegate
-```
-
-2. Deploy the application:
+1. Deploy the application:
 
 ```bash
 helm upgrade --install agegate-verifier ./agegate-verifier \
   --namespace agegate \
+  --create-namespace \
   --values agegate-verifier/values.yaml \
   --set env.TIMESCALEDB_PASSWORD=YOUR_DB_PASSWORD \
   --set env.ADMIN_PASS=YOUR_ADMIN_PASSWORD
 ```
 
-3. Run `npm test` locally before every push
+2. Run `npm test` locally before every push
 
 ## CI/CD
 

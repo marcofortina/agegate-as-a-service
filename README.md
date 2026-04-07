@@ -23,13 +23,9 @@ Italian anonymous age verification solution based on UE Blueprint (eIDAS 2.0).
 git clone https://github.com/marcofortina/agegate-as-a-service
 cd agegate-as-a-service
 
-kubectl create ns agegate
-
-kubectl apply -f redis.yaml
-kubectl apply -f timescaledb.yaml
-
 helm upgrade --install agegate-verifier ./agegate-verifier \
   --namespace agegate \
+  --create-namespace \
   --values agegate-verifier/values.yaml \
   --set env.TIMESCALEDB_PASSWORD=YOUR_DB_PASSWORD \
   --set env.ADMIN_PASS=YOUR_ADMIN_PASSWORD

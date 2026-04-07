@@ -4,7 +4,7 @@ metadata:
   name: redis
   namespace: agegate
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       app: redis
@@ -17,7 +17,7 @@ spec:
       - name: redis
         image: redis:7-alpine
         ports:
-        - containerPort: 6379
+        - containerPort: {{ .Values.port }}
 ---
 apiVersion: v1
 kind: Service
@@ -28,4 +28,4 @@ spec:
   selector:
     app: redis
   ports:
-  - port: 6379
+  - port: {{ .Values.port }}

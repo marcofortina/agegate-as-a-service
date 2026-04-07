@@ -1,0 +1,3 @@
+enabled: true
+replicaCount: 1
+port: 6379

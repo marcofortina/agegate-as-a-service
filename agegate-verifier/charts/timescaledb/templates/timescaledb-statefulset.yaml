@@ -5,7 +5,7 @@ metadata:
   namespace: agegate
 spec:
   serviceName: timescaledb
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       app: timescaledb
@@ -17,34 +17,28 @@ spec:
       containers:
       - name: timescaledb
         image: timescale/timescaledb:latest-pg15
-
         env:
         - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
               name: agegate-secrets
               key: TIMESCALEDB_PASSWORD
-
         - name: POSTGRES_DB
           value: "agegate"
-
         ports:
-        - containerPort: 5432
-
+        - containerPort: {{ .Values.port }}
         volumeMounts:
         - name: data
           mountPath: /var/lib/postgresql/data
-
   volumeClaimTemplates:
   - metadata:
       name: data
     spec:
-      accessModes: [ "ReadWriteOnce" ]
+      accessModes: ["ReadWriteOnce"]
       storageClassName: local-path
       resources:
         requests:
-          storage: 5Gi
-
+          storage: {{ .Values.storage }}
 ---
 apiVersion: v1
 kind: Service
@@ -55,5 +49,5 @@ spec:
   selector:
     app: timescaledb
   ports:
-  - port: 5432
-    targetPort: 5432
+  - port: {{ .Values.port }}
+    targetPort: {{ .Values.port }}

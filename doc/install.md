@@ -10,26 +10,24 @@
 
 ## K3s Lab Deployment (updated April 2026)
 
-### 1. Create namespace
+### 1. Deploy the application with dependencies
+
+All dependencies (Redis and TimescaleDB) are included as Helm subcharts. Deploy everything in a single command:
 
 ```bash
-kubectl create ns agegate
+cd ~/agegate-as-a-service
+
+helm upgrade --install agegate-verifier ./agegate-verifier \
+  --namespace agegate \
+  --create-namespace \
+  --values agegate-verifier/values.yaml \
+  --set env.TIMESCALEDB_PASSWORD=YOUR_DB_PASSWORD \
+  --set env.ADMIN_PASS=YOUR_ADMIN_PASSWORD
 ```
 
----
+> ✅ The `--set` flags are used to pass sensitive passwords. All other configuration is loaded from `values.yaml`.
 
-### 2. Deploy Redis and TimescaleDB
-
-Apply the provided manifests:
-
-```bash
-kubectl apply -f redis.yaml
-kubectl apply -f timescaledb.yaml
-```
-
----
-
-### 3. Verify infrastructure
+### 2. Verify infrastructure
 
 ```bash
 kubectl get pods -n agegate
@@ -38,49 +36,16 @@ kubectl get svc -n agegate
 
 Expected services:
 
+* All pods are in `Running` or `Completed` state
+* Persistent Volume Claims are correctly bound
 * `redis` on port `6379`
 * `timescaledb` on port `5432`
 
 ---
 
-### 4. Create secrets
-
-```bash
-kubectl create secret generic agegate-secrets \
-  --from-literal=ADMIN_PASS=YOUR_ADMIN_PASSWORD \
-  --from-literal=TIMESCALEDB_PASSWORD=YOUR_DB_PASSWORD \
-  -n agegate
-```
-
----
-
-### 5. Deploy the application
-
-```bash
-cd ~/agegate-as-a-service
-
-helm upgrade --install agegate-verifier ./agegate-verifier \
-  --namespace agegate \
-  --values agegate-verifier/values.yaml
-```
-
----
-
-### 6. Verify deployment
-
-```bash
-kubectl get pods -n agegate
-kubectl get pvc -n agegate
-```
-
-Ensure:
-
-* All pods are in `Running` or `Completed` state
-* Persistent Volume Claims are correctly bound
-
----
-
 ### 7. Health checks
+
+Forward local port to the application pod:
 
 ```bash
 kubectl port-forward svc/agegate-verifier 8080:8080 -n agegate

@@ -45,3 +45,7 @@ env:
   REDIS_PORT: "6379"
   VERIFIER_BACKEND: "mock" # or "eidas" in future
   ALLOWED_ORIGINS: "http://agegate.local,https://yourdomain.it"
+
+# Subcharts
+redis: {}
+timescaledb: {}
