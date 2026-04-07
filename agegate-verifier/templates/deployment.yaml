@@ -24,10 +24,10 @@ spec:
               name: agegate-secrets
 
         env:
-          - name: VERIFIER_BACKEND
-            value: "{{ .Values.env.VERIFIER_BACKEND }}"
-          - name: ALLOWED_ORIGINS
-            value: "{{ .Values.env.ALLOWED_ORIGINS }}"
+          {{- range $key, $value := .Values.env }}
+          - name: {{ $key }}
+            value: {{ $value | quote }}
+          {{- end }}
 
         ports:
           - containerPort: 8080

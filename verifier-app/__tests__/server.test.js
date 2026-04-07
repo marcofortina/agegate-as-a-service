@@ -1,14 +1,72 @@
 const request = require('supertest');
-const express = require('express');
-const app = require('../server'); // import app
 
-jest.mock('pg');
-jest.mock('ioredis');
-jest.mock('prom-client');
+// ================= MOCKS =================
+
+jest.mock('ioredis', () => {
+  const mockRedis = {
+    multi: jest.fn(() => ({
+      incr: jest.fn(),
+      ttl: jest.fn(),
+      exec: jest.fn().mockResolvedValue([
+        [null, 1],
+        [null, 60]
+      ])
+    })),
+    expire: jest.fn(),
+    decr: jest.fn(),
+    del: jest.fn(),
+    ping: jest.fn().mockResolvedValue('PONG'),
+    quit: jest.fn()
+  };
+
+  const RedisMock = jest.fn(() => mockRedis);
+  RedisMock.__mockInstance = mockRedis;
+
+  return RedisMock;
+});
+
+jest.mock('pg', () => {
+  return {
+    Pool: jest.fn().mockImplementation(() => ({
+      query: jest.fn().mockResolvedValue({ rows: [] }),
+      end: jest.fn()
+    }))
+  };
+});
+
+jest.mock('prom-client', () => {
+  return {
+    Registry: jest.fn().mockImplementation(() => ({
+      registerMetric: jest.fn(),
+      metrics: jest.fn().mockResolvedValue('')
+    })),
+    collectDefaultMetrics: jest.fn(),
+    Counter: jest.fn().mockImplementation(() => ({
+      inc: jest.fn()
+    })),
+    Histogram: jest.fn().mockImplementation(() => ({
+      observe: jest.fn()
+    }))
+  };
+});
+
+// Force deterministic behavior
+jest.spyOn(Math, 'random').mockReturnValue(1);
+
+// NOW require app AFTER mocks
+const { app, server } = require('../server');
 
 describe('AgeGate as a Service - API Tests', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  afterAll(async () => {
+    server.close();
+    const Redis = require('ioredis');
+    if (Redis.__mockInstance && Redis.__mockInstance.quit) {
+      await Redis.__mockInstance.quit();
+    }
   });
 
   test('GET /health should return healthy', async () => {
@@ -30,6 +88,17 @@ describe('AgeGate as a Service - API Tests', () => {
   });
 
   test('POST /verify - rate limit exceeded', async () => {
+    const Redis = require('ioredis');
+
+    Redis.__mockInstance.multi.mockReturnValue({
+      incr: jest.fn(),
+      ttl: jest.fn(),
+      exec: jest.fn().mockResolvedValue([
+        [null, 101],
+        [null, 60]
+      ])
+    });
+
     const res = await request(app)
       .post('/verify')
       .set('x-api-key', 'rate-limit-key')
@@ -39,6 +108,17 @@ describe('AgeGate as a Service - API Tests', () => {
   });
 
   test('POST /verify - Zod validation error', async () => {
+    const Redis = require('ioredis');
+
+    Redis.__mockInstance.multi.mockReturnValue({
+      incr: jest.fn(),
+      ttl: jest.fn(),
+      exec: jest.fn().mockResolvedValue([
+        [null, 1],
+        [null, 60]
+      ])
+    });
+
     const res = await request(app)
       .post('/verify')
       .set('x-api-key', 'test-key')
@@ -49,7 +129,7 @@ describe('AgeGate as a Service - API Tests', () => {
   });
 
   test('GET /api-docs should serve Swagger UI', async () => {
-    const res = await request(app).get('/api-docs');
+    const res = await request(app).get('/api-docs/');
     expect(res.status).toBe(200);
     expect(res.text).toContain('swagger');
   });

@@ -118,12 +118,13 @@ async function checkRateLimit(apiKey) {
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS verifications (
-      id SERIAL PRIMARY KEY,
+      id SERIAL,
       client_id TEXT NOT NULL,
       api_key TEXT NOT NULL,
       threshold INTEGER NOT NULL DEFAULT 18,
       timestamp TIMESTAMPTZ NOT NULL,
-      verified BOOLEAN NOT NULL
+      verified BOOLEAN NOT NULL,
+      PRIMARY KEY (id, timestamp)
     );
   `);
   await pool.query(`
@@ -166,7 +167,7 @@ app.post('/verify', async (req, res) => {
   }
 
   try {
-    const validated = verifySchema.parse(req.body);
+    verifySchema.parse(req.body);
 
     // === REAL AGE VERIFICATION ===
     let verified = true;
@@ -340,7 +341,7 @@ app.get('/ready', async (req, res) => {
     await pool.query('SELECT 1');
     await redis.ping();
     res.status(200).json({ status: 'ready' });
-  } catch (err) {
+  } catch {
     res.status(503).json({ status: 'not ready' });
   }
 });
@@ -380,5 +381,4 @@ const shutdown = async () => {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-// Export app for testing (Jest/Supertest)
-module.exports = app;
+module.exports = { app, server };
