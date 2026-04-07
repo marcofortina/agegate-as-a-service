@@ -290,14 +290,21 @@ app.get('/onboarding', (req, res) => {
   `);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM received - shutting down gracefully');
-  app.close(() => {
-    pool.end();
-    redis.quit();
-    process.exit(0);
-  });
+// ==================== SERVER START + GRACEFUL SHUTDOWN ====================
+const server = app.listen(PORT, () => {
+  logger.info(`Age Gate as a Service v${require('./package.json').version} listening on port ${PORT}`);
 });
 
-app.listen(PORT, () => logger.info(`Age Gate Phase 20 running on port ${PORT}`));
+// Graceful shutdown
+const shutdown = async () => {
+  logger.info('SIGTERM/SIGINT received – closing gracefully');
+  server.close(async () => {
+    await pool.end();
+    await redis.quit();
+    logger.info('All connections closed');
+    process.exit(0);
+  });
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
