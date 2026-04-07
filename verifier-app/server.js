@@ -330,8 +330,10 @@ app.get('/metrics', async (req, res) => {
   res.end(await register.metrics());
 });
 
-// Health and readiness
-app.get('/health', (req, res) => res.status(200).json({ status: 'healthy' }));
+// Health & Readiness endpoints (required for K3s probes)
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy', version: require('./package.json').version });
+});
 
 app.get('/ready', async (req, res) => {
   try {
@@ -377,3 +379,6 @@ const shutdown = async () => {
 
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+// Export app for testing (Jest/Supertest)
+module.exports = app;
