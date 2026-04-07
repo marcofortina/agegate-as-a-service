@@ -6,8 +6,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci --prefix verifier-app
+        with:
+          node-version: 20
+      - run: npm install --prefix verifier-app
       - run: npm test --prefix verifier-app || echo "No tests yet"
       - uses: azure/setup-helm@v4
       - run: helm lint ./agegate-verifier
