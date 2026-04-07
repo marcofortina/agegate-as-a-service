@@ -39,7 +39,11 @@ app.use('/sdk', express.static(path.join(__dirname)));
 // Configuration
 const PORT = process.env.PORT || 8080;
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
-const ADMIN_PASS = process.env.ADMIN_PASS || 'agegate2026';
+const ADMIN_PASS = process.env.ADMIN_PASS;
+if (!ADMIN_PASS) {
+  logger.error('ADMIN_PASS environment variable is required');
+  process.exit(1);
+}
 const PUBLIC_URL = process.env.PUBLIC_URL || `http://agegate.local:${process.env.NODEPORT || 30452}`;
 
 // Database
@@ -48,8 +52,12 @@ const pool = new Pool({
   port: parseInt(process.env.TIMESCALEDB_PORT || '5432'),
   database: process.env.TIMESCALEDB_DB || 'agegate',
   user: process.env.TIMESCALEDB_USER || 'postgres',
-  password: process.env.TIMESCALEDB_PASSWORD || 'agegate2026',
+  password: process.env.TIMESCALEDB_PASSWORD,
 });
+if (!process.env.TIMESCALEDB_PASSWORD) {
+  logger.error('TIMESCALEDB_PASSWORD environment variable is required');
+  process.exit(1);
+}
 
 // Redis
 const redis = new Redis({
