@@ -5,5 +5,6 @@ COPY package*.json ./
 RUN npm ci --only=production
 COPY server.js .
 COPY agegate-sdk.js .
+COPY proxy.js .
 EXPOSE 8080
 CMD ["npm", "start"]

@@ -2,6 +2,9 @@ try {
   require('dotenv').config({ override: false });
 } catch { /* dotenv not available, using env vars */ }
 
+// Disable IP anonymization during tests (avoids Redis dependency)
+process.env.ANONYMIZE_IP = 'false';
+
 const request = require('supertest');
 
 // ================= MOCKS =================

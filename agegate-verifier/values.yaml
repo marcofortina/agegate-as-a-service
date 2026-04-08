@@ -29,6 +29,15 @@ persistence:
   size: 10Gi
   mountPath: /data
 
+# Privacy configuration
+privacy:
+  anonymizeIP: true
+  ipSalt:
+    enabled: true
+    # value: "fixed-salt-here"  # Optional: auto-generated if not set
+    rotationDays: 1  # Daily rotation
+    retentionDays: 7 # Keep old salts for 7 days
+
 # === ALL ENVIRONMENT VARIABLES FOR K3s LAB ===
 env:
   LOG_LEVEL: info
@@ -45,6 +54,10 @@ env:
   REDIS_PORT: "6379"
   VERIFIER_BACKEND: "mock" # or "eidas" in future
   ALLOWED_ORIGINS: "http://agegate.local,https://yourdomain.it"
+  # Privacy & Anonymization (double anonymity)
+  ANONYMIZE_IP: "true"
+  IP_SALT: "" # auto-generated if empty
+  NODE_ENV: "production"
 
 # Subcharts
 redis: {}

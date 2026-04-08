@@ -17,6 +17,13 @@ Italian anonymous age verification solution based on UE Blueprint (eIDAS 2.0).
 
 ---
 
+### Privacy First
+* **Double anonymity** via IP hashing (SHA256 + daily salt rotation)
+* No IP addresses stored in logs or database
+* Compliant with EU Blueprint and AGCOM requirements
+
+---
+
 ## Quick Start (K3s Lab)
 
 ```bash
@@ -57,6 +64,13 @@ All environment variables are documented in:
 ```bash
 .env.example
 ```
+
+### Privacy Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANONYMIZE_IP` | `true` | Enable IP hashing (double anonymity) |
+| `IP_SALT` | auto-generated | Secret salt for IP hashing (rotate daily) |
 
 ---
 

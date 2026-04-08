@@ -16,8 +16,19 @@ const helmet = require('helmet');
 const cors = require('cors');
 const { z } = require('zod');
 
+const { anonymizeIPMiddleware } = require('./proxy');
+const { setRedisClient } = require('./proxy');
 const cookieParser = require('cookie-parser');
+
+// Apply IP anonymization BEFORE any logging or rate limiting
+const anonymizeIP = process.env.ANONYMIZE_IP !== 'false'; // Enabled by default
+app.use(anonymizeIPMiddleware({
+  enabled: anonymizeIP,
+  passthroughOnError: process.env.NODE_ENV === 'development'
+}));
+
 app.use(cookieParser());
+app.use(express.json({ limit: '10kb' }));
 
 // Configure security based on protocol
 const isHttps = process.env.PUBLIC_URL && process.env.PUBLIC_URL.startsWith('https');
@@ -38,8 +49,6 @@ app.use(helmet({
 if (isHttps) {
   app.use(cors({ origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*' }));
 }
-
-app.use(express.json({ limit: '10kb' })); // Prevent large payloads
 
 // Structured logger
 const logger = pino({
@@ -119,9 +128,14 @@ const redis = new Redis({
   port: parseInt(process.env.REDIS_PORT || '6379'),
 });
 
+// Share Redis client with proxy for multi-replica salt storage
+setRedisClient(redis);
+
 // Rate limit
-async function checkRateLimit(apiKey) {
-  const key = `rate:${apiKey}`;
+async function checkRateLimit(req, apiKey) {
+  // Use anonymized IP in rate limit key for better distribution
+  const anonymizedIP = req.anonymizedIP || 'unknown';
+  const key = `rate:${apiKey}:${anonymizedIP}`;
   const multi = redis.multi();
   multi.incr(key);
   multi.ttl(key);
@@ -130,7 +144,7 @@ async function checkRateLimit(apiKey) {
   const count = countRes[1];
   const ttl = ttlRes[1];
 
-  if (ttl === -1) await redis.expire(key, 60);
+  if (ttl === -1) await redis.expire(key, 60); // 1 minute window
 
   if (count > 100) {
     await redis.decr(key);
@@ -217,8 +231,8 @@ app.post('/verify', async (req, res) => {
     return res.status(401).json({ status: 'error', message: 'Missing API Key' });
   }
 
-  if (!await checkRateLimit(apiKey)) {
-    logger.warn({ apiKey: apiKey.substring(0, 8) + '...' }, 'Rate limit exceeded');
+  if (!await checkRateLimit(req, apiKey)) {
+    logger.warn({ apiKey: apiKey.substring(0, 8) + '...', anonymizedIP: req.anonymizedIP }, 'Rate limit exceeded');
     return res.status(429).json({ status: 'error', message: 'Rate limit exceeded (100 requests/min)' });
   }
 
@@ -245,7 +259,8 @@ app.post('/verify', async (req, res) => {
 
     const duration = (Date.now() - start) / 1000;
 
-    logger.info({ clientId, threshold, verified, backend, durationMs: Math.round(duration * 1000) }, 'Verification completed');
+    // Log anonymized IP instead of real IP
+    logger.info({ clientId, threshold, verified, backend, durationMs: Math.round(duration * 1000), anonymizedIP: req.anonymizedIP }, 'Verification completed');
 
     verificationCounter.inc({ client_id: clientId, threshold });
     verificationDuration.observe({ client_id: clientId }, duration);
