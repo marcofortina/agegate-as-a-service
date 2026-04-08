@@ -1,17 +1,17 @@
 name: CI - Build & Helm Lint
 on: [push, pull_request]
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
+      - run: node -v
+      - run: npm -v
       - run: npm install --prefix verifier-app
       - run: cp .env.example verifier-app/.env
       - run: npm test --prefix verifier-app || echo "No tests yet"
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - run: helm lint ./agegate-verifier
