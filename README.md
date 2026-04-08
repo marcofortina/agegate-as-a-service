@@ -1,3 +1,6 @@
+[![CI](https://github.com/marcofortina/agegate-as-a-service/actions/workflows/ci.yml/badge.svg)](https://github.com/marcofortina/agegate-as-a-service/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 # Age Gate as a Service
 
 Italian anonymous age verification solution based on UE Blueprint (eIDAS 2.0).
@@ -14,6 +17,16 @@ Italian anonymous age verification solution based on UE Blueprint (eIDAS 2.0).
 * Structured logging with Pino
 * Kubernetes multi-replica ready
 * Graceful shutdown
+
+---
+
+For detailed guides, see:
+- [Installation](./doc/install.md)
+- [API Reference](./doc/api.md)
+- [Privacy & Double Anonymity](./doc/privacy.md)
+- [Integration Example](./doc/integration-example.md)
+- [Backup & Restore](./doc/backup-restore.md)
+- [Upgrading Helm Chart](./doc/upgrade-helm.md)
 
 ---
 
