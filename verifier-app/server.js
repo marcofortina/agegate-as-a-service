@@ -2,6 +2,7 @@ try {
   require('dotenv').config({ override: false });
 } catch { /* dotenv not available, using env vars */ }
 
+const crypto = require('crypto');
 const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
@@ -170,6 +171,33 @@ async function initDB() {
     SELECT create_hypertable('verifications', 'timestamp', if_not_exists => TRUE);
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id SERIAL PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      api_key TEXT UNIQUE NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      expires_at TIMESTAMPTZ,
+      last_used_at TIMESTAMPTZ,
+      is_active BOOLEAN DEFAULT true,
+      created_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(api_key);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_client ON api_keys(client_id);
+  `);
+
+  // Migrate existing keys from verifications table (one-time)
+  await pool.query(`
+    INSERT INTO api_keys (client_id, api_key, created_at, is_active, created_by)
+    SELECT DISTINCT client_id, api_key, MIN(timestamp), true, 'migration'
+    FROM verifications v
+    WHERE NOT EXISTS (SELECT 1 FROM api_keys a WHERE a.api_key = v.api_key)
+    GROUP BY client_id, api_key
+    ON CONFLICT (api_key) DO NOTHING
+  `);
+  const { rowCount } = await pool.query(`SELECT COUNT(*) as count FROM api_keys WHERE created_by = 'migration'`);
+  if (rowCount > 0) logger.info(`Migrated ${rowCount} existing API keys to api_keys table`);
+
   // Set retention policy (default: 30 days)
   const retentionDays = parseInt(process.env.RETENTION_DAYS || '30');
   if (retentionDays > 0) {
@@ -237,10 +265,30 @@ app.post('/verify', async (req, res) => {
     return res.status(401).json({ status: 'error', message: 'Missing API Key' });
   }
 
+  // Validate API key: exists, active, not expired
+  const keyCheck = await pool.query(
+    `SELECT client_id, expires_at, is_active FROM api_keys WHERE api_key = $1`,
+    [apiKey]
+  );
+  if (keyCheck.rows.length === 0 || !keyCheck.rows[0].is_active) {
+    logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Invalid or revoked API key');
+    return res.status(401).json({ status: 'error', message: 'Invalid API key' });
+  }
+  const keyRecord = keyCheck.rows[0];
+  if (keyRecord.expires_at && new Date(keyRecord.expires_at) < new Date()) {
+    logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Expired API key');
+    return res.status(401).json({ status: 'error', message: 'API key expired' });
+  }
+
   if (!await checkRateLimit(req, apiKey)) {
     logger.warn({ apiKey: apiKey.substring(0, 8) + '...', anonymizedIP: req.anonymizedIP }, 'Rate limit exceeded');
     return res.status(429).json({ status: 'error', message: 'Rate limit exceeded (100 requests/min)' });
   }
+
+  // Update last_used_at (async, don't await to avoid slowing response)
+  pool.query(`UPDATE api_keys SET last_used_at = NOW() WHERE api_key = $1`, [apiKey]).catch(err => {
+    logger.error({ err, apiKey: apiKey.substring(0,8)+'...' }, 'Failed to update last_used_at');
+  });
 
   try {
     verifySchema.parse(req.body);
@@ -325,14 +373,16 @@ app.get('/dashboard', async (req, res) => {
     });
   }
 
-  const stats = await pool.query(`
-    SELECT client_id, api_key, COUNT(*) as checks, MAX(timestamp) as last_check
-    FROM verifications
-    GROUP BY client_id, api_key
-    ORDER BY checks DESC
+  // Fetch API keys with status
+  const keys = await pool.query(`
+    SELECT client_id, api_key, created_at, expires_at, last_used_at, is_active
+    FROM api_keys
+    ORDER BY created_at DESC
   `);
 
-  const total = stats.rows.reduce((sum, r) => sum + parseInt(r.checks), 0);
+  // Global verification stats
+  const verificationsCount = await pool.query(`SELECT COUNT(*) as total FROM verifications`);
+  const total = parseInt(verificationsCount.rows[0].total);
 
   let html = `<!DOCTYPE html>
 <html>
@@ -348,36 +398,8 @@ app.get('/dashboard', async (req, res) => {
   </style>
 </head>
 <body>
-  <h1>Age Gate as a Service - Dashboard</h1>
-  <div class="card">
-    <h2>Global Statistics</h2>
-    <p>Total verifications: <strong>${total}</strong></p>
-  </div>
-  <div class="card">
-    <h2>Clients</h2>
-    <table>
-      <tr><th>Client</th><th>API Key</th><th>Verifications</th><th>Last verification</th><th>Action</th></tr>`;
-
-  stats.rows.forEach(r => {
-    html += `<tr>
-      <td>${r.client_id}</td>
-      <td>${r.api_key}</td>
-      <td>${r.checks}</td>
-      <td>${r.last_check}</td>
-      <td><button onclick="revokeKey('${r.api_key}')">Revoke</button></td>
-    </tr>`;
-  });
-
-  html += `</table>
-  </div>
-
-  <div class="card">
-    <h2>Add New Client</h2>
-    <input id="newClientId" placeholder="Client ID (e.g. casino-italia.it)" style="width:320px">
-    <button onclick="registerClient()">Add Client</button>
-  </div>
-
   <script>
+    // Define functions before any button uses them
     async function registerClient() {
       const clientId = document.getElementById('newClientId').value.trim();
       if (!clientId) return alert('Client ID is required');
@@ -387,7 +409,7 @@ app.get('/dashboard', async (req, res) => {
         body: JSON.stringify({ client_id: clientId })
       });
       const data = await response.json();
-      alert('API Key generated: ' + data.api_key);
+      alert('API Key generated: ' + data.api_key + (data.expires_at ? '\\nExpires: ' + new Date(data.expires_at).toLocaleString() : ''));
       location.reload();
     }
 
@@ -405,7 +427,61 @@ app.get('/dashboard', async (req, res) => {
         alert('Error revoking API Key');
       }
     }
+
+    async function rotateKey(apiKey) {
+      if (!confirm('Generate a new API Key and revoke the old one?')) return;
+      const response = await fetch('/api/rotate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: apiKey })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        alert('New API Key generated: ' + data.api_key + '\\nExpires: ' + new Date(data.expires_at).toLocaleString());
+        location.reload();
+      } else {
+        alert('Error rotating API Key');
+      }
+    }
+
+    window.registerClient = registerClient;
+    window.revokeKey = revokeKey;
+    window.rotateKey = rotateKey;
   </script>
+
+  <h1>Age Gate as a Service - Dashboard</h1>
+  <div class="card">
+    <h2>Global Statistics</h2>
+    <p>Total verifications: <strong>${total}</strong></p>
+  </div>
+  <div class="card">
+    <h2>API Keys Management</h2>
+    <table>
+      <tr><th>Client</th><th>API Key</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Status</th><th>Actions</th></tr>`;
+
+  keys.rows.forEach(k => {
+    html += `<tr>
+      <td>${k.client_id}</td>
+      <td><code>${k.api_key.substring(0,12)}...</code></td>
+      <td>${new Date(k.created_at).toLocaleString()}</td>
+      <td>${k.expires_at ? new Date(k.expires_at).toLocaleString() : 'never'}</td>
+      <td>${k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never'}</td>
+      <td>${k.is_active ? '✅ active' : '❌ revoked'}</td>
+      <td>
+         ${k.is_active ? `<button onclick="rotateKey('${k.api_key}')">Rotate</button>` : ''}
+         <button onclick="revokeKey('${k.api_key}')">Revoke</button>
+      </td>
+    </tr>`;
+  });
+
+  html += `</table>
+  </div>
+
+  <div class="card">
+    <h2>Add New Client</h2>
+    <input id="newClientId" placeholder="Client ID (e.g. casino-italia.it)" style="width:320px">
+    <button onclick="registerClient()">Add Client</button>
+  </div>
 
   <a href="/logout">Logout</a>
 </body>
@@ -427,8 +503,21 @@ app.post('/api/register', (req, res) => {
   const { client_id } = req.body;
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
 
-  const apiKey = 'agk_' + Math.random().toString(36).substring(2, 18);
-  res.json({ client_id, api_key: apiKey });
+  const randomBytes = crypto.randomBytes(24).toString('hex');
+  const apiKey = `agk_${randomBytes}`;
+  const expiresAt = new Date();
+  expiresAt.setFullYear(expiresAt.getFullYear() + 1); // 1 year validity
+
+  pool.query(
+    `INSERT INTO api_keys (client_id, api_key, expires_at, created_by)
+     VALUES ($1, $2, $3, $4)`,
+    [client_id, apiKey, expiresAt, 'admin']
+  ).then(() => {
+    res.json({ client_id, api_key: apiKey, expires_at: expiresAt });
+  }).catch(err => {
+    logger.error(err);
+    res.status(500).json({ error: 'Failed to create API key' });
+  });
 });
 
 app.post('/api/revoke', async (req, res) => {
@@ -436,10 +525,44 @@ app.post('/api/revoke', async (req, res) => {
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'api_key is required' });
 
-  await pool.query('DELETE FROM verifications WHERE api_key = $1', [api_key]);
+  // Soft delete: mark as inactive
+  await pool.query('UPDATE api_keys SET is_active = false WHERE api_key = $1', [api_key]);
+  // Also clear from Redis rate limiting
   await redis.del(`rate:${api_key}`);
 
   res.json({ status: 'success', message: 'API Key revoked' });
+});
+
+// Rotate API key: generate new, revoke old
+app.post('/api/rotate', async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { api_key } = req.body;
+  if (!api_key) return res.status(400).json({ error: 'api_key is required' });
+
+  const result = await pool.query('SELECT client_id FROM api_keys WHERE api_key = $1 AND is_active = true', [api_key]);
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: 'Active API key not found' });
+  }
+  const client_id = result.rows[0].client_id;
+
+  const randomBytes = crypto.randomBytes(24).toString('hex');
+  const newApiKey = `agk_${randomBytes}`;
+  const expiresAt = new Date();
+  expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+
+  await pool.query('BEGIN');
+  await pool.query('UPDATE api_keys SET is_active = false WHERE api_key = $1', [api_key]);
+  await pool.query(
+    `INSERT INTO api_keys (client_id, api_key, expires_at, created_by)
+     VALUES ($1, $2, $3, $4)`,
+    [client_id, newApiKey, expiresAt, 'admin']
+  );
+  await pool.query('COMMIT');
+
+  // Clear old key from Redis
+  await redis.del(`rate:${api_key}`);
+
+  res.json({ client_id, api_key: newApiKey, expires_at: expiresAt });
 });
 
 // Logout endpoint

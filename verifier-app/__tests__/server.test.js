@@ -35,7 +35,31 @@ jest.mock('ioredis', () => {
 jest.mock('pg', () => {
   return {
     Pool: jest.fn().mockImplementation(() => ({
-      query: jest.fn().mockResolvedValue({ rows: [] }),
+      query: jest.fn().mockImplementation((sql, params) => {
+        // Handle api_keys table queries
+        if (sql.includes('FROM api_keys')) {
+          const key = params ? params[0] : null;
+          // Recognized test keys
+          if (key === 'test-key-123' || key === 'rate-limit-key') {
+            return Promise.resolve({ rows: [{ client_id: 'test', expires_at: null, is_active: true }] });
+          }
+          return Promise.resolve({ rows: [] });
+        }
+        // Handle INSERT into api_keys (for /api/register tests or migration)
+        if (sql.includes('INSERT INTO api_keys')) {
+          return Promise.resolve({ rows: [{ api_key: params[1] }] });
+        }
+        // Handle migration check query (SELECT COUNT(*) ... WHERE created_by = 'migration')
+        if (sql.includes('WHERE created_by')) {
+          return Promise.resolve({ rows: [{ count: 0 }] });
+        }
+        // Handle SELECT COUNT(*) FROM verifications (for dashboard)
+        if (sql.includes('SELECT COUNT(*) as total FROM verifications')) {
+          return Promise.resolve({ rows: [{ total: 42 }] });
+        }
+        // Handle all other queries
+        return Promise.resolve({ rows: [] });
+      }),
       end: jest.fn()
     }))
   };
@@ -150,7 +174,7 @@ describe('AgeGate as a Service - API Tests', () => {
 
     const res = await request(app)
       .post('/verify')
-      .set('x-api-key', 'test-key')
+      .set('x-api-key', 'test-key-123')
       .send({ threshold: 99 });
 
     expect(res.status).toBe(400);
