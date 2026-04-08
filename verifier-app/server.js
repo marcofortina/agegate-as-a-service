@@ -1,6 +1,6 @@
 try {
   require('dotenv').config({ override: false });
-} catch {}
+} catch { /* dotenv not available, using env vars */ }
 
 const express = require('express');
 const path = require('path');
@@ -153,6 +153,29 @@ const verifySchema = z.object({
   threshold: z.number().int().min(18).max(25).default(18)
 });
 
+// Nice HTML login page
+app.get('/login', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"><title>AgeGate Login</title></head>
+    <body style="font-family:system-ui;background:#111;color:#0f0;padding:40px;text-align:center">
+      <h1>Age Gate Admin Login</h1>
+      <input id="user" placeholder="Username" value="admin"><br><br>
+      <input id="pass" type="password" placeholder="Password" value="agegate2026"><br><br>
+      <button onclick="login()">Login</button>
+      <script>
+        function login() {
+          const u = document.getElementById('user').value;
+          const p = document.getElementById('pass').value;
+          window.location.href = '/dashboard?auth=' + btoa(u + ':' + p);
+        }
+      </script>
+    </body>
+    </html>
+  `);
+});
+
 // Verifier
 app.post('/verify', async (req, res) => {
   const start = Date.now();
@@ -217,7 +240,7 @@ app.post('/verify', async (req, res) => {
 
 // Dashboard
 app.get('/dashboard', async (req, res) => {
-  if (!isAdmin(req)) return res.status(401).send('Unauthorized');
+  if (!isAdmin(req)) return res.redirect('/login');
 
   const stats = await pool.query(`
     SELECT client_id, api_key, COUNT(*) as checks, MAX(timestamp) as last_check

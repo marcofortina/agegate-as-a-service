@@ -1,6 +1,6 @@
 try {
   require('dotenv').config({ override: false });
-} catch {}
+} catch { /* dotenv not available, using env vars */ }
 
 const request = require('supertest');
 
@@ -77,6 +77,28 @@ describe('AgeGate as a Service - API Tests', () => {
     const res = await request(app).get('/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('healthy');
+  });
+
+  test('GET /login should serve login page', async () => {
+    const res = await request(app).get('/login');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Age Gate Admin Login');
+    expect(res.text).toContain('<input id="user"');
+    expect(res.text).toContain('<input id="pass" type="password"');
+  });
+
+  test('GET /dashboard without auth redirects to /login', async () => {
+    const res = await request(app).get('/dashboard');
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('/login');
+  });
+
+  test('GET /dashboard with wrong auth still redirects', async () => {
+    const wrongAuth = Buffer.from('admin:wrongpassword').toString('base64');
+    const res = await request(app)
+      .get('/dashboard')
+      .set('Authorization', `Basic ${wrongAuth}`);
+    expect(res.status).toBe(302);
   });
 
   test('POST /verify - valid request with mock backend', async () => {
