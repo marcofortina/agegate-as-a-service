@@ -1,3 +1,7 @@
+try {
+  require('dotenv').config({ override: false });
+} catch {}
+
 const request = require('supertest');
 
 // ================= MOCKS =================

@@ -1,3 +1,7 @@
+try {
+  require('dotenv').config({ override: false });
+} catch {}
+
 const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
