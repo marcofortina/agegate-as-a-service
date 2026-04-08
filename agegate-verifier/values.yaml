@@ -60,6 +60,10 @@ env:
   NODE_ENV: "production"
   # Data retention
   RETENTION_DAYS: "30"
+  # OpenTelemetry
+  OTEL_SERVICE_NAME: "agegate-verifier"
+  OTEL_TRACES_ENDPOINT: "http://otel-collector:4318/v1/traces"
+  OTEL_METRICS_ENDPOINT: "http://otel-collector:4318/v1/metrics"
 
 # Subcharts
 redis: {}
