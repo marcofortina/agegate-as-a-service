@@ -72,6 +72,20 @@ Otherwise use port-forward (see above).
 
 ## Notes
 
+### Data Retention (GDPR compliance)
+
+Verification records are automatically deleted after a configurable number of days using TimescaleDB's retention policy.
+
+Set the environment variable `RETENTION_DAYS` (default: `30`). For example, in `values.yaml`:
+
+```yaml
+env:
+  RETENTION_DAYS: "30"
+```
+
+To disable automatic deletion, set `RETENTION_DAYS: "0"` (not recommended for production).
+The retention job runs automatically every 24 hours.
+
 * Redis is deployed as a single-instance Deployment (suitable for lab environments)
 * TimescaleDB uses a StatefulSet with persistent storage (`5Gi`)
 

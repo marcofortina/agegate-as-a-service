@@ -169,7 +169,13 @@ async function initDB() {
   await pool.query(`
     SELECT create_hypertable('verifications', 'timestamp', if_not_exists => TRUE);
   `);
-  logger.info('TimescaleDB hypertable ready');
+
+  // Set retention policy (default: 30 days)
+  const retentionDays = parseInt(process.env.RETENTION_DAYS || '30');
+  if (retentionDays > 0) {
+    await pool.query(`SELECT add_retention_policy('verifications', INTERVAL '${retentionDays} days', if_not_exists => TRUE);`);
+    logger.info(`TimescaleDB retention policy set to ${retentionDays} days`);
+  }
 }
 initDB().catch(err => logger.error(err, 'Database initialization failed'));
 

@@ -58,6 +58,8 @@ env:
   ANONYMIZE_IP: "true"
   IP_SALT: "" # auto-generated if empty
   NODE_ENV: "production"
+  # Data retention
+  RETENTION_DAYS: "30"
 
 # Subcharts
 redis: {}
