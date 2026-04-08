@@ -16,6 +16,9 @@ const helmet = require('helmet');
 const cors = require('cors');
 const { z } = require('zod');
 
+const cookieParser = require('cookie-parser');
+app.use(cookieParser());
+
 // Configure security based on protocol
 const isHttps = process.env.PUBLIC_URL && process.env.PUBLIC_URL.startsWith('https');
 
@@ -157,10 +160,18 @@ async function initDB() {
 initDB().catch(err => logger.error(err, 'Database initialization failed'));
 
 // Admin auth helper
-function isAdmin(req) {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Basic ')) return false;
-  const credentials = Buffer.from(auth.split(' ')[1], 'base64').toString();
+function isAdmin(req, checkCookie = true) {
+  // Check Authorization header first
+  let authHeader = req.headers.authorization;
+
+  // If no header but cookie exists, use cookie
+  if (!authHeader && checkCookie && req.cookies && req.cookies.admin_auth) {
+    authHeader = `Basic ${req.cookies.admin_auth}`;
+  }
+
+  if (!authHeader || !authHeader.startsWith('Basic ')) return false;
+
+  const credentials = Buffer.from(authHeader.split(' ')[1], 'base64').toString();
   const [user, pass] = credentials.split(':');
   return user === ADMIN_USER && pass === ADMIN_PASS;
 }
@@ -258,16 +269,39 @@ app.post('/verify', async (req, res) => {
 
 // Dashboard
 app.get('/dashboard', async (req, res) => {
-  // Check both Authorization header and query param (for login page redirect)
-  let authHeader = req.headers.authorization;
+  // Handle login from query param (first time login)
+  const authHeader = req.headers.authorization;
 
   if (!authHeader && req.query.auth) {
-    authHeader = `Basic ${req.query.auth}`;
-    req.headers.authorization = authHeader;
+    const isValid = await isAdminWithAuth(`Basic ${req.query.auth}`);
+
+    if (isValid) {
+      // Set session cookie
+      res.cookie('admin_auth', req.query.auth, {
+        httpOnly: true,
+        secure: isHttps,
+        sameSite: 'strict',
+        maxAge: 3600000 // 1 hour
+      });
+      // Redirect to clean dashboard (remove auth from URL)
+      return res.redirect('/dashboard');
+    }
+    return res.redirect('/login?error=invalid');
   }
 
-  if (!isAdmin(req)) {
+  // Check authentication via cookie or header
+  if (!isAdmin(req, true)) {
     return res.redirect('/login');
+  }
+
+  // If user came via header but no cookie yet, set one
+  if (!req.cookies.admin_auth && req.headers.authorization) {
+    const authValue = req.headers.authorization.replace('Basic ', '');
+    res.cookie('admin_auth', authValue, {
+      httpOnly: true,
+      secure: isHttps,
+      sameSite: 'strict'
+    });
   }
 
   const stats = await pool.query(`
@@ -352,11 +386,19 @@ app.get('/dashboard', async (req, res) => {
     }
   </script>
 
-  <a href="/login">Logout</a>
+  <a href="/logout">Logout</a>
 </body>
 </html>`;
   res.send(html);
 });
+
+// Helper function to check auth without modifying request
+async function isAdminWithAuth(authHeader) {
+  if (!authHeader || !authHeader.startsWith('Basic ')) return false;
+  const credentials = Buffer.from(authHeader.split(' ')[1], 'base64').toString();
+  const [user, pass] = credentials.split(':');
+  return user === ADMIN_USER && pass === ADMIN_PASS;
+}
 
 // Admin endpoints
 app.post('/api/register', (req, res) => {
@@ -377,6 +419,12 @@ app.post('/api/revoke', async (req, res) => {
   await redis.del(`rate:${api_key}`);
 
   res.json({ status: 'success', message: 'API Key revoked' });
+});
+
+// Logout endpoint
+app.get('/logout', (req, res) => {
+  res.clearCookie('admin_auth');
+  res.redirect('/login');
 });
 
 // Metrics
