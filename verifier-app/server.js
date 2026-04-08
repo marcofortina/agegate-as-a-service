@@ -16,8 +16,26 @@ const helmet = require('helmet');
 const cors = require('cors');
 const { z } = require('zod');
 
-app.use(helmet());                    // Security headers
-app.use(cors({ origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*' }));
+// Configure security based on protocol
+const isHttps = process.env.PUBLIC_URL && process.env.PUBLIC_URL.startsWith('https');
+
+// Helmet configuration
+app.use(helmet({
+  crossOriginOpenerPolicy: isHttps ? { policy: 'same-origin' } : false,
+  crossOriginResourcePolicy: isHttps ? { policy: 'same-origin' } : false,
+  contentSecurityPolicy: isHttps ? {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+    }
+  } : false
+}));
+
+// CORS only in HTTPS
+if (isHttps) {
+  app.use(cors({ origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*' }));
+}
+
 app.use(express.json({ limit: '10kb' })); // Prevent large payloads
 
 // Structured logger
@@ -240,7 +258,17 @@ app.post('/verify', async (req, res) => {
 
 // Dashboard
 app.get('/dashboard', async (req, res) => {
-  if (!isAdmin(req)) return res.redirect('/login');
+  // Check both Authorization header and query param (for login page redirect)
+  let authHeader = req.headers.authorization;
+
+  if (!authHeader && req.query.auth) {
+    authHeader = `Basic ${req.query.auth}`;
+    req.headers.authorization = authHeader;
+  }
+
+  if (!isAdmin(req)) {
+    return res.redirect('/login');
+  }
 
   const stats = await pool.query(`
     SELECT client_id, api_key, COUNT(*) as checks, MAX(timestamp) as last_check
