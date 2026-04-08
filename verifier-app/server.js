@@ -198,6 +198,18 @@ async function initDB() {
   const { rowCount } = await pool.query(`SELECT COUNT(*) as count FROM api_keys WHERE created_by = 'migration'`);
   if (rowCount > 0) logger.info(`Migrated ${rowCount} existing API keys to api_keys table`);
 
+  // Audit log table for admin actions
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_audit_log (
+      id SERIAL PRIMARY KEY,
+      admin_user TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target TEXT,
+      details JSONB,
+      timestamp TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
   // Set retention policy (default: 30 days)
   const retentionDays = parseInt(process.env.RETENTION_DAYS || '30');
   if (retentionDays > 0) {
@@ -206,6 +218,28 @@ async function initDB() {
   }
 }
 initDB().catch(err => logger.error(err, 'Database initialization failed'));
+
+// Helper to log admin actions
+async function logAdminAction(adminUser, action, target, details = {}) {
+  try {
+    await pool.query(
+      `INSERT INTO admin_audit_log (admin_user, action, target, details)
+       VALUES ($1, $2, $3, $4)`,
+      [adminUser, action, target, details]
+    );
+  } catch (err) {
+    logger.error({ err, adminUser, action }, 'Failed to log admin action');
+  }
+}
+
+// getAdminUser helper
+function getAdminUser(req) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Basic ')) return 'unknown';
+  const credentials = Buffer.from(auth.split(' ')[1], 'base64').toString();
+  const [user] = credentials.split(':');
+  return user;
+}
 
 // Admin auth helper
 function isAdmin(req, checkCookie = true) {
@@ -380,9 +414,30 @@ app.get('/dashboard', async (req, res) => {
     ORDER BY created_at DESC
   `);
 
+  // Fetch success rate for each client (based on verifications)
+  const successRates = await pool.query(`
+    SELECT client_id,
+           COUNT(*) as total,
+           SUM(CASE WHEN verified THEN 1 ELSE 0 END) as successful
+    FROM verifications
+    GROUP BY client_id
+  `);
+  const rateMap = {};
+  successRates.rows.forEach(r => {
+    rateMap[r.client_id] = r.total > 0 ? (r.successful / r.total * 100).toFixed(1) : 0;
+  });
+
   // Global verification stats
   const verificationsCount = await pool.query(`SELECT COUNT(*) as total FROM verifications`);
   const total = parseInt(verificationsCount.rows[0].total);
+
+  // Fetch audit log (last 20 entries)
+  const auditLog = await pool.query(`
+    SELECT admin_user, action, target, details, timestamp
+    FROM admin_audit_log
+    ORDER BY timestamp DESC
+    LIMIT 20
+  `);
 
   let html = `<!DOCTYPE html>
 <html>
@@ -457,15 +512,17 @@ app.get('/dashboard', async (req, res) => {
   <div class="card">
     <h2>API Keys Management</h2>
     <table>
-      <tr><th>Client</th><th>API Key</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Status</th><th>Actions</th></tr>`;
+       <tr><th>Client</th><th>API Key</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Success Rate</th><th>Status</th><th>Actions</th></tr>`;
 
   keys.rows.forEach(k => {
+    const successRate = rateMap[k.client_id] || '0';
     html += `<tr>
       <td>${k.client_id}</td>
       <td><code>${k.api_key.substring(0,12)}...</code></td>
       <td>${new Date(k.created_at).toLocaleString()}</td>
       <td>${k.expires_at ? new Date(k.expires_at).toLocaleString() : 'never'}</td>
       <td>${k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never'}</td>
+      <td>${successRate}%</td>
       <td>${k.is_active ? '✅ active' : '❌ revoked'}</td>
       <td>
          ${k.is_active ? `<button onclick="rotateKey('${k.api_key}')">Rotate</button>` : ''}
@@ -481,6 +538,22 @@ app.get('/dashboard', async (req, res) => {
     <h2>Add New Client</h2>
     <input id="newClientId" placeholder="Client ID (e.g. casino-italia.it)" style="width:320px">
     <button onclick="registerClient()">Add Client</button>
+  </div>
+
+  <div class="card">
+    <h2>Admin Audit Log (last 20 actions)</h2>
+    <table>
+      <tr><th>Admin</th><th>Action</th><th>Target</th><th>Details</th><th>Timestamp</th></tr>`;
+  auditLog.rows.forEach(log => {
+    html += `<tr>
+      <td>${log.admin_user}</td>
+      <td>${log.action}</td>
+      <td>${log.target || '-'}</td>
+      <td>${JSON.stringify(log.details)}</td>
+      <td>${new Date(log.timestamp).toLocaleString()}</td>
+    </tr>`;
+  });
+  html += `</table>
   </div>
 
   <a href="/logout">Logout</a>
@@ -502,6 +575,7 @@ app.post('/api/register', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { client_id } = req.body;
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+  const adminUser = getAdminUser(req);
 
   const randomBytes = crypto.randomBytes(24).toString('hex');
   const apiKey = `agk_${randomBytes}`;
@@ -511,8 +585,9 @@ app.post('/api/register', (req, res) => {
   pool.query(
     `INSERT INTO api_keys (client_id, api_key, expires_at, created_by)
      VALUES ($1, $2, $3, $4)`,
-    [client_id, apiKey, expiresAt, 'admin']
+    [client_id, apiKey, expiresAt, adminUser]
   ).then(() => {
+    logAdminAction(adminUser, 'REGISTER', client_id, { api_key: apiKey.substring(0,8)+'...', expires_at: expiresAt });
     res.json({ client_id, api_key: apiKey, expires_at: expiresAt });
   }).catch(err => {
     logger.error(err);
@@ -524,12 +599,14 @@ app.post('/api/revoke', async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'api_key is required' });
+  const adminUser = getAdminUser(req);
 
   // Soft delete: mark as inactive
   await pool.query('UPDATE api_keys SET is_active = false WHERE api_key = $1', [api_key]);
   // Also clear from Redis rate limiting
   await redis.del(`rate:${api_key}`);
 
+  await logAdminAction(adminUser, 'REVOKE', api_key, {});
   res.json({ status: 'success', message: 'API Key revoked' });
 });
 
@@ -540,6 +617,7 @@ app.post('/api/rotate', async (req, res) => {
   if (!api_key) return res.status(400).json({ error: 'api_key is required' });
 
   const result = await pool.query('SELECT client_id FROM api_keys WHERE api_key = $1 AND is_active = true', [api_key]);
+  const adminUser = getAdminUser(req);
   if (result.rows.length === 0) {
     return res.status(404).json({ error: 'Active API key not found' });
   }
@@ -555,12 +633,14 @@ app.post('/api/rotate', async (req, res) => {
   await pool.query(
     `INSERT INTO api_keys (client_id, api_key, expires_at, created_by)
      VALUES ($1, $2, $3, $4)`,
-    [client_id, newApiKey, expiresAt, 'admin']
+    [client_id, newApiKey, expiresAt, adminUser]
   );
   await pool.query('COMMIT');
 
   // Clear old key from Redis
   await redis.del(`rate:${api_key}`);
+
+  await logAdminAction(adminUser, 'ROTATE', client_id, { old_key: api_key.substring(0,8)+'...', new_key: newApiKey.substring(0,8)+'...' });
 
   res.json({ client_id, api_key: newApiKey, expires_at: expiresAt });
 });
