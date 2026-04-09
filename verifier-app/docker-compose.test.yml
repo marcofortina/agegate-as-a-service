@@ -3,6 +3,11 @@ version: '3.8'
 services:
   timescaledb-test:
     image: timescale/timescaledb:latest-pg14
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       POSTGRES_DB: agegate_test
       POSTGRES_USER: testuser
@@ -17,6 +22,11 @@ services:
 
   redis-test:
     image: redis:7-alpine
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "6380:6379"
     healthcheck:
