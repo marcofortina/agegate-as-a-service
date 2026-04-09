@@ -68,12 +68,20 @@ jest.mock('pg', () => {
         if (sql.includes('SELECT DATE(timestamp) as day')) {
           return Promise.resolve({ rows: [] });
         }
+        // Handle SELECT rate_limit
+        if (sql.includes('SELECT rate_limit FROM api_keys WHERE api_key = $1')) {
+          return Promise.resolve({ rows: [{ rate_limit: 100 }] });
+        }
         if (sql.includes('WHERE created_by')) {
           return Promise.resolve({ rows: [{ count: 0 }] });
         }
         // Handle query for /api/keys/:client_id
         if (sql.includes('SELECT api_key, created_at, expires_at, last_used_at, is_active, created_by, description FROM api_keys WHERE client_id = $1')) {
           return Promise.resolve({ rows: [{ api_key: 'test-key-123', created_at: new Date(), expires_at: null, last_used_at: null, is_active: true, created_by: 'admin', description: 'Test key' }] });
+        }
+        // Handle UPDATE rate_limit
+        if (sql.includes('UPDATE api_keys SET rate_limit = $1 WHERE api_key = $2 RETURNING client_id')) {
+          return Promise.resolve({ rows: [{ client_id: 'rate-test' }] });
         }
         // Handle all other queries
         return Promise.resolve({ rows: [] });
@@ -336,5 +344,36 @@ describe('AgeGate as a Service - API Tests', () => {
     expect(verifyOld.body.message).toContain('Invalid API key');
 
     pool.query = originalQuery;
+  });
+
+  test('PATCH /api/keys/:api_key/rate-limit updates rate limit', async () => {
+    // Register a key
+    const reg = await request(app)
+      .post('/api/register')
+      .auth('admin', ADMIN_PASS)
+      .send({ client_id: 'rate-test' })
+      .expect(200);
+    const apiKey = reg.body.api_key;
+
+    const res = await request(app)
+      .patch(`/api/keys/${apiKey}/rate-limit`)
+      .auth('admin', ADMIN_PASS)
+      .send({ rate_limit: 200 })
+      .expect(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.rate_limit).toBe(200);
+
+    // Optionally verify that rate limit is enforced (requires mocking redis)
+    // For unit test, we trust the database update.
+  });
+
+  // Additional test: invalid rate_limit
+  test('PATCH /api/keys/:api_key/rate-limit rejects invalid values', async () => {
+    const res = await request(app)
+      .patch('/api/keys/some-key/rate-limit')
+      .auth('admin', ADMIN_PASS)
+      .send({ rate_limit: 0 })
+      .expect(400);
+    expect(res.body.error).toContain('between 1 and 10000');
   });
 });

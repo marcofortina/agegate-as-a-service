@@ -145,9 +145,13 @@ async function checkRateLimit(req, apiKey) {
   const count = countRes[1];
   const ttl = ttlRes[1];
 
+  // Retrieve per-key rate limit from database (cached? simple query for now)
+  const limitRes = await pool.query('SELECT rate_limit FROM api_keys WHERE api_key = $1', [apiKey]);
+  const limit = limitRes.rows[0]?.rate_limit || 100;
+
   if (ttl === -1) await redis.expire(key, 60); // 1 minute window
 
-  if (count > 100) {
+  if (count > limit) {
     await redis.decr(key);
     return false;
   }
@@ -179,6 +183,7 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       expires_at TIMESTAMPTZ,
       last_used_at TIMESTAMPTZ,
+      rate_limit INTEGER DEFAULT 100,
       description TEXT,
       is_active BOOLEAN DEFAULT true,
       created_by TEXT
@@ -486,7 +491,7 @@ app.get('/dashboard', async (req, res) => {
 
   // Fetch API keys with status
   const keys = await pool.query(`
-    SELECT client_id, api_key, created_at, expires_at, last_used_at, is_active, description
+    SELECT client_id, api_key, created_at, expires_at, last_used_at, is_active, description, rate_limit
     FROM api_keys
     ORDER BY created_at DESC
   `);
@@ -603,13 +608,14 @@ app.get('/dashboard', async (req, res) => {
   <div class="card">
     <h2>API Keys Management</h2>
     <table>
-       <th>Client</th><th>API Key</th><th>Description</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Success Rate</th><th>Status</th><th>Actions</th><th>Stats</th>`;
+      <th>Client</th><th>API Key</th><th>Description</th><th>Rate Limit</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Success Rate</th><th>Status</th><th>Actions</th><th>Stats</th>`;
 
   keys.rows.forEach(k => {
     const successRate = rateMap[k.client_id] || '0';
     html += `<tr>
       <td>${k.client_id}</td>
       <td><code>${k.api_key.substring(0,12)}...</code></td>
+      <td>${k.rate_limit}</td>
       <td>${k.description || '-'}</td>
       <td>${new Date(k.created_at).toLocaleString()}</td>
       <td>${k.expires_at ? new Date(k.expires_at).toLocaleString() : 'never'}</td>
@@ -772,6 +778,26 @@ app.post('/api/rotate', async (req, res) => {
   await logAdminAction(adminUser, 'ROTATE', client_id, { old_key: api_key.substring(0,8)+'...', new_key: newApiKey.substring(0,8)+'...' });
 
   res.json({ client_id, api_key: newApiKey, expires_at: expiresAt });
+});
+
+// PATCH /api/keys/:api_key/rate-limit - Update rate limit for an API key (admin only)
+app.patch('/api/keys/:api_key/rate-limit', async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { api_key } = req.params;
+  const { rate_limit } = req.body;
+  if (!Number.isInteger(rate_limit) || rate_limit < 1 || rate_limit > 10000) {
+    return res.status(400).json({ error: 'rate_limit must be an integer between 1 and 10000' });
+  }
+  const result = await pool.query(
+    'UPDATE api_keys SET rate_limit = $1 WHERE api_key = $2 RETURNING client_id',
+    [rate_limit, api_key]
+  );
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: 'API key not found' });
+  }
+  const adminUser = getAdminUser(req);
+  await logAdminAction(adminUser, 'UPDATE_RATE_LIMIT', api_key, { rate_limit });
+  res.json({ success: true, client_id: result.rows[0].client_id, rate_limit });
 });
 
 // GET /api/keys/:client_id - List all API keys for a specific client (admin only)
