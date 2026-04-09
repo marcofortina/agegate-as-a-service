@@ -673,22 +673,32 @@ app.post('/api/register', (req, res) => {
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
   const adminUser = getAdminUser(req);
 
-  const randomBytes = crypto.randomBytes(24).toString('hex');
-  const apiKey = `agk_${randomBytes}`;
   const expiresAt = new Date();
   expiresAt.setFullYear(expiresAt.getFullYear() + 1); // 1 year validity
 
-  pool.query(
-    `INSERT INTO api_keys (client_id, api_key, expires_at, created_by, description)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [client_id, apiKey, expiresAt, adminUser, description || null]
-  ).then(() => {
-    logAdminAction(adminUser, 'REGISTER', client_id, { api_key: apiKey.substring(0,8)+'...', expires_at: expiresAt });
-    res.json({ client_id, api_key: apiKey, expires_at: expiresAt });
-  }).catch(err => {
-    logger.error(err);
-    res.status(500).json({ error: 'Failed to create API key' });
-  });
+  let retries = 3;
+  const attempt = () => {
+    const randomBytes = crypto.randomBytes(24).toString('hex');
+    const apiKey = `agk_${randomBytes}`;
+    pool.query(
+      `INSERT INTO api_keys (client_id, api_key, expires_at, created_by, description)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [client_id, apiKey, expiresAt, adminUser, description || null]
+    ).then(() => {
+      logAdminAction(adminUser, 'REGISTER', client_id, { api_key: apiKey.substring(0,8)+'...', expires_at: expiresAt });
+      res.json({ client_id, api_key: apiKey, expires_at: expiresAt });
+    }).catch(err => {
+      if (err.code === '23505' && retries > 0) {
+        retries--;
+        logger.warn({ client_id, retriesLeft: retries }, 'API key collision, retrying');
+        attempt();
+      } else {
+        logger.error(err);
+        res.status(500).json({ error: 'Failed to create API key' });
+      }
+    });
+  };
+  attempt();
 });
 
 app.post('/api/revoke', async (req, res) => {
@@ -827,4 +837,4 @@ const shutdown = async () => {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-module.exports = { app, server };
+module.exports = { app, server, pool };

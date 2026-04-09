@@ -236,4 +236,40 @@ describe('AgeGate as a Service - API Tests', () => {
     // Check that description was passed (mock does not store, but we trust the code)
     // In real DB, description would be stored.
   });
+
+  test('POST /api/register retries on key collision', async () => {
+    // Get the pool instance from the app (imported after mocks)
+    const { pool } = require('../server');
+    const originalQuery = pool.query;
+
+    let insertAttempts = 0;
+    const mockQuery = jest.fn(async (sql, params) => {
+      if (sql.includes('INSERT INTO api_keys')) {
+        insertAttempts++;
+        if (insertAttempts === 1) {
+          const error = new Error('duplicate key');
+          error.code = '23505';
+          throw error;
+        }
+        if (insertAttempts === 2) {
+          return { rows: [] };
+        }
+      }
+      // For other queries, call original
+      return originalQuery.call(pool, sql, params);
+    });
+
+    pool.query = mockQuery;
+
+    const res = await request(app)
+      .post('/api/register')
+      .auth('admin', ADMIN_PASS)
+      .send({ client_id: 'collision-test', description: 'retry test' })
+      .expect(200);
+
+    expect(res.body.api_key).toMatch(/^agk_[a-f0-9]{48}$/);
+    expect(insertAttempts).toBe(2);
+
+    pool.query = originalQuery;
+  });
 });
