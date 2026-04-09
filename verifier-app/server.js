@@ -609,6 +609,28 @@ app.get('/dashboard', async (req, res) => {
       }
     }
 
+    async function editRateLimit(apiKey, currentLimit) {
+      const newLimit = prompt('Enter new rate limit (1-10000):', currentLimit);
+      if (newLimit === null) return;
+      const limitNum = parseInt(newLimit, 10);
+      if (isNaN(limitNum) || limitNum < 1 || limitNum > 10000) {
+        alert('Rate limit must be an integer between 1 and 10000');
+        return;
+      }
+      const response = await fetch('/api/keys/' + apiKey + '/rate-limit', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rate_limit: limitNum })
+      });
+      if (response.ok) {
+        alert('Rate limit updated');
+        location.reload();
+      } else {
+        const err = await response.json();
+        alert('Failed to update rate limit: ' + (err.error || 'Unknown error'));
+      }
+    }
+
     async function editDescription(apiKey, currentDesc) {
       const newDesc = prompt('Enter new description:', currentDesc);
       if (newDesc === null) return;
@@ -647,7 +669,7 @@ app.get('/dashboard', async (req, res) => {
       <td>${k.client_id}</td>
       <td><code>${k.api_key.substring(0,12)}...</code></td>
       <td>${k.description || '-'}</td>
-      <td>${k.rate_limit}</td>
+      <td id="rate-limit-${k.api_key}">${k.rate_limit}</td>
       <td>${new Date(k.created_at).toLocaleString()}</td>
       <td>${k.expires_at ? new Date(k.expires_at).toLocaleString() : 'never'}</td>
       <td>${k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never'}</td>
@@ -655,6 +677,7 @@ app.get('/dashboard', async (req, res) => {
       <td>${k.is_active ? '✅ active' : '❌ revoked'}</td>
       <td>
          ${k.is_active ? `<button onclick="rotateKey('${k.api_key}')">Rotate</button>` : ''}
+         <button onclick="editRateLimit('${k.api_key}', ${k.rate_limit})">Edit Rate</button>
          <button onclick="revokeKey('${k.api_key}')">Revoke</button>
 	 <button onclick="editDescription('${k.api_key}', '${(k.description || '').replace(/'/g, "\\'")}')">Edit Desc</button>
        </td>

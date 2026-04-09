@@ -6,7 +6,7 @@ Age Gate as a Service supports per‑key rate limiting. Each API key has a confi
 
 - The rate limit is enforced per `(api_key, anonymized_ip)` pair.
 - The limit is stored in the `api_keys` table (`rate_limit` column).
-- Admin can change the limit via a dedicated endpoint.
+- Admin can change the limit via a dedicated endpoint or the admin dashboard.
 
 ## Admin Endpoint
 
@@ -34,9 +34,11 @@ Update the rate limit for a specific API key.
 
 **Constraints:** `rate_limit` must be an integer between 1 and 10000.
 
-## Dashboard
+## Admin Dashboard
 
-The admin dashboard displays the current rate limit for each API key in the table.
+In the admin dashboard, each API key row has an **Edit Rate** button. Clicking it opens a prompt where you can enter a new limit (between 1 and 10000). After confirmation, the page reloads and the new limit is displayed in the table.
+
+The rate limit is also displayed in the dedicated column.
 
 ## Defaults
 
