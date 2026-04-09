@@ -4,14 +4,35 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
           node-version: 24
-      - run: node -v
-      - run: npm -v
-      - run: npm install --prefix verifier-app
-      - run: cp .env.example verifier-app/.env
-      - run: npm test --prefix verifier-app || echo "No tests yet"
+      - name: Show Node.js version
+        run: node -v
+      - name: Show npm version
+        run: npm -v
+      - name: Install dependencies
+        run: npm install --prefix verifier-app
+      - name: Copy environment file
+        run: cp .env.example verifier-app/.env
+      - name: Run unit tests
+        run: npm test --prefix verifier-app || echo "No tests yet"
+      - name: Install docker-compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose
+      - name: Run integration tests
+        run: |
+          cd verifier-app
+          docker-compose -f docker-compose.test.yml up -d
+          npm run test:integration-compose
+      - name: Stop containers
+        if: always()
+        run: |
+          cd verifier-app
+          docker-compose -f docker-compose.test.yml down -v
       - uses: azure/setup-helm@v5
       - run: helm lint ./agegate-verifier
