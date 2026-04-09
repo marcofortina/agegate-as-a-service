@@ -729,19 +729,42 @@ app.post('/api/rotate', async (req, res) => {
   }
   const client_id = result.rows[0].client_id;
 
-  const randomBytes = crypto.randomBytes(24).toString('hex');
-  const newApiKey = `agk_${randomBytes}`;
   const expiresAt = new Date();
   expiresAt.setFullYear(expiresAt.getFullYear() + 1);
 
-  await pool.query('BEGIN');
-  await pool.query('UPDATE api_keys SET is_active = false WHERE api_key = $1', [api_key]);
-  await pool.query(
-    `INSERT INTO api_keys (client_id, api_key, expires_at, created_by)
-     VALUES ($1, $2, $3, $4)`,
-    [client_id, newApiKey, expiresAt, adminUser]
-  );
-  await pool.query('COMMIT');
+  let retries = 3;
+  let success = false;
+  let newApiKey = '';
+
+  while (retries > 0 && !success) {
+    const randomBytes = crypto.randomBytes(24).toString('hex');
+    const candidateKey = `agk_${randomBytes}`;
+    try {
+      await pool.query('BEGIN');
+      await pool.query('UPDATE api_keys SET is_active = false WHERE api_key = $1', [api_key]);
+      await pool.query(
+        `INSERT INTO api_keys (client_id, api_key, expires_at, created_by)
+         VALUES ($1, $2, $3, $4)`,
+        [client_id, candidateKey, expiresAt, adminUser]
+      );
+      await pool.query('COMMIT');
+      newApiKey = candidateKey;
+      success = true;
+    } catch (err) {
+      await pool.query('ROLLBACK');
+      if (err.code === '23505' && retries > 1) {
+        retries--;
+        logger.warn({ client_id, retriesLeft: retries }, 'API key collision on rotate, retrying');
+        continue;
+      }
+      logger.error(err);
+      return res.status(500).json({ error: 'Failed to rotate API key' });
+    }
+  }
+
+  if (!success) {
+    return res.status(500).json({ error: 'Failed to generate unique API key after retries' });
+  }
 
   // Clear old key from Redis
   await redis.del(`rate:${api_key}`);

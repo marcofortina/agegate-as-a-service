@@ -272,4 +272,69 @@ describe('AgeGate as a Service - API Tests', () => {
 
     pool.query = originalQuery;
   });
+
+  test('POST /api/rotate retries on key collision', async () => {
+    const { pool } = require('../server');
+    const originalQuery = pool.query;
+
+    let insertAttempts = 0;
+    let registeredKey = null;
+    const mockQuery = jest.fn(async (sql, params) => {
+      // Handle SELECT for the key we registered
+      if (sql.includes('SELECT client_id FROM api_keys WHERE api_key = $1 AND is_active = true')) {
+        if (params && params[0] === registeredKey) {
+          return { rows: [{ client_id: 'rotate-test' }] };
+        }
+        return originalQuery.call(pool, sql, params);
+      }
+      if (sql.includes('INSERT INTO api_keys')) {
+        if (!registeredKey) {
+          // Registration INSERT
+          return originalQuery.call(pool, sql, params);
+        } else {
+          // Rotate INSERT
+          insertAttempts++;
+          if (insertAttempts === 1) {
+            const error = new Error('duplicate key');
+            error.code = '23505';
+            throw error;
+          }
+          if (insertAttempts === 2) {
+            return { rows: [] };
+          }
+        }
+      }
+      return originalQuery.call(pool, sql, params);
+    });
+
+    pool.query = mockQuery;
+
+    // Register a key
+    const reg = await request(app)
+      .post('/api/register')
+      .auth('admin', ADMIN_PASS)
+      .send({ client_id: 'rotate-test' })
+      .expect(200);
+    registeredKey = reg.body.api_key;
+
+    // Rotate
+    const res = await request(app)
+      .post('/api/rotate')
+      .auth('admin', ADMIN_PASS)
+      .send({ api_key: registeredKey })
+      .expect(200);
+
+    expect(res.body.api_key).toMatch(/^agk_[a-f0-9]{48}$/);
+    expect(insertAttempts).toBe(2);
+
+    // Verify old key is revoked
+    const verifyOld = await request(app)
+      .post('/verify')
+      .set('x-api-key', registeredKey)
+      .send({ client_id: 'rotate-test', threshold: 18 })
+      .expect(401);
+    expect(verifyOld.body.message).toContain('Invalid API key');
+
+    pool.query = originalQuery;
+  });
 });
