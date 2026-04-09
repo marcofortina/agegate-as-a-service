@@ -223,7 +223,6 @@ async function initDB() {
     logger.info(`TimescaleDB retention policy set to ${retentionDays} days`);
   }
 }
-initDB().catch(err => logger.error(err, 'Database initialization failed'));
 
 // Helper to log admin actions
 async function logAdminAction(adminUser, action, target, details = {}) {
@@ -912,6 +911,13 @@ app.get('/onboarding', (req, res) => {
 });
 
 // ==================== SERVER START + GRACEFUL SHUTDOWN ====================
+let dbInitPromise = initDB().catch(err => logger.error(err, 'Database initialization failed'));
+
+app.use(async (req, res, next) => {
+  await dbInitPromise;
+  next();
+});
+
 const server = app.listen(PORT, () => {
   logger.info(`Age Gate as a Service v${require('./package.json').version} listening on port ${PORT}`);
 });
