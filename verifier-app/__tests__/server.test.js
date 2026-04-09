@@ -4,6 +4,8 @@ try {
 
 // Disable IP anonymization during tests (avoids Redis dependency)
 process.env.ANONYMIZE_IP = 'false';
+// Use ADMIN_PASS from environment
+const ADMIN_PASS = process.env.ADMIN_PASS;
 
 const request = require('supertest');
 
@@ -68,6 +70,10 @@ jest.mock('pg', () => {
         }
         if (sql.includes('WHERE created_by')) {
           return Promise.resolve({ rows: [{ count: 0 }] });
+        }
+        // Handle query for /api/keys/:client_id
+        if (sql.includes('SELECT api_key, created_at, expires_at, last_used_at, is_active, created_by FROM api_keys WHERE client_id = $1')) {
+          return Promise.resolve({ rows: [{ api_key: 'test-key-123', created_at: new Date(), expires_at: null, last_used_at: null, is_active: true, created_by: 'admin' }] });
         }
         // Handle all other queries
         return Promise.resolve({ rows: [] });
@@ -207,5 +213,15 @@ describe('AgeGate as a Service - API Tests', () => {
 
     expect(res.body.client_id).toBe('test.local');
     expect(res.body.total_verifications).toBe(42);
+  });
+
+  test('GET /api/keys/:client_id returns keys for admin', async () => {
+    const res = await request(app)
+      .get('/api/keys/test.local')
+      .auth('admin', ADMIN_PASS)
+      .expect(200);
+
+    expect(res.body.client_id).toBe('test.local');
+    expect(Array.isArray(res.body.keys)).toBe(true);
   });
 });

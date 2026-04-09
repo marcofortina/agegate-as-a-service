@@ -737,6 +737,29 @@ app.post('/api/rotate', async (req, res) => {
   res.json({ client_id, api_key: newApiKey, expires_at: expiresAt });
 });
 
+// GET /api/keys/:client_id - List all API keys for a specific client (admin only)
+app.get('/api/keys/:client_id', async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { client_id } = req.params;
+  if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+
+  const result = await pool.query(
+    `SELECT api_key, created_at, expires_at, last_used_at, is_active, created_by
+     FROM api_keys
+     WHERE client_id = $1
+     ORDER BY created_at DESC`,
+    [client_id]
+  );
+
+  res.json({
+    client_id,
+    keys: result.rows.map(row => ({
+      ...row,
+      api_key: row.api_key.substring(0,12) + '...' // mask for safety
+    }))
+  });
+});
+
 // Logout endpoint
 app.get('/logout', (req, res) => {
   res.clearCookie('admin_auth');
