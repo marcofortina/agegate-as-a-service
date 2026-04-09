@@ -249,3 +249,12 @@ If you change the Collector’s service name or namespace, update these endpoint
 - [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack)
 - [Tempo](https://grafana.com/oss/tempo/)
 - [Node.js Dashboard (Grafana)](https://grafana.com/grafana/dashboards/12230)
+
+## Test Coverage
+
+We use [Codecov](https://codecov.io) to track test coverage over time. The coverage badge in the README shows the percentage of code covered by unit tests. Click the badge to see detailed reports, including coverage per file and trends.
+
+To run coverage locally:
+```bash
+npm test -- --coverage
+```

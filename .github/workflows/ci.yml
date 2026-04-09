@@ -18,8 +18,14 @@ jobs:
         run: npm install --prefix verifier-app
       - name: Copy environment file
         run: cp .env.example verifier-app/.env
-      - name: Run unit tests
-        run: npm test --prefix verifier-app || echo "No tests yet"
+      - name: Run unit tests with coverage
+        run: npm test --prefix verifier-app -- --coverage --coverageReporters=lcov
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          directory: verifier-app/coverage
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Install docker-compose
         run: |
           sudo apt-get update
