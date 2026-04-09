@@ -179,6 +179,7 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       expires_at TIMESTAMPTZ,
       last_used_at TIMESTAMPTZ,
+      description TEXT,
       is_active BOOLEAN DEFAULT true,
       created_by TEXT
     );
@@ -485,7 +486,7 @@ app.get('/dashboard', async (req, res) => {
 
   // Fetch API keys with status
   const keys = await pool.query(`
-    SELECT client_id, api_key, created_at, expires_at, last_used_at, is_active
+    SELECT client_id, api_key, created_at, expires_at, last_used_at, is_active, description
     FROM api_keys
     ORDER BY created_at DESC
   `);
@@ -533,11 +534,12 @@ app.get('/dashboard', async (req, res) => {
     // Define functions before any button uses them
     async function registerClient() {
       const clientId = document.getElementById('newClientId').value.trim();
+      const description = document.getElementById('newClientDesc').value.trim();
       if (!clientId) return alert('Client ID is required');
       const response = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: clientId })
+        body: JSON.stringify({ client_id: clientId, description: description || undefined })
       });
       const data = await response.json();
       alert('API Key generated: ' + data.api_key + (data.expires_at ? '\\nExpires: ' + new Date(data.expires_at).toLocaleString() : ''));
@@ -601,13 +603,14 @@ app.get('/dashboard', async (req, res) => {
   <div class="card">
     <h2>API Keys Management</h2>
     <table>
-       <tr><th>Client</th><th>API Key</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Success Rate</th><th>Status</th><th>Actions</th><th>Stats</th></tr>`;
+       <th>Client</th><th>API Key</th><th>Description</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Success Rate</th><th>Status</th><th>Actions</th><th>Stats</th>`;
 
   keys.rows.forEach(k => {
     const successRate = rateMap[k.client_id] || '0';
     html += `<tr>
       <td>${k.client_id}</td>
       <td><code>${k.api_key.substring(0,12)}...</code></td>
+      <td>${k.description || '-'}</td>
       <td>${new Date(k.created_at).toLocaleString()}</td>
       <td>${k.expires_at ? new Date(k.expires_at).toLocaleString() : 'never'}</td>
       <td>${k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never'}</td>
@@ -629,6 +632,7 @@ app.get('/dashboard', async (req, res) => {
   <div class="card">
     <h2>Add New Client</h2>
     <input id="newClientId" placeholder="Client ID (e.g. casino-italia.it)" style="width:320px">
+    <input id="newClientDesc" placeholder="Description (optional)" style="width:320px">
     <button onclick="registerClient()">Add Client</button>
   </div>
 
@@ -665,7 +669,7 @@ async function isAdminWithAuth(authHeader) {
 // Admin endpoints
 app.post('/api/register', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
-  const { client_id } = req.body;
+  const { client_id, description } = req.body;
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
   const adminUser = getAdminUser(req);
 
@@ -675,9 +679,9 @@ app.post('/api/register', (req, res) => {
   expiresAt.setFullYear(expiresAt.getFullYear() + 1); // 1 year validity
 
   pool.query(
-    `INSERT INTO api_keys (client_id, api_key, expires_at, created_by)
-     VALUES ($1, $2, $3, $4)`,
-    [client_id, apiKey, expiresAt, adminUser]
+    `INSERT INTO api_keys (client_id, api_key, expires_at, created_by, description)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [client_id, apiKey, expiresAt, adminUser, description || null]
   ).then(() => {
     logAdminAction(adminUser, 'REGISTER', client_id, { api_key: apiKey.substring(0,8)+'...', expires_at: expiresAt });
     res.json({ client_id, api_key: apiKey, expires_at: expiresAt });

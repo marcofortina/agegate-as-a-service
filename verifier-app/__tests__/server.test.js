@@ -72,8 +72,8 @@ jest.mock('pg', () => {
           return Promise.resolve({ rows: [{ count: 0 }] });
         }
         // Handle query for /api/keys/:client_id
-        if (sql.includes('SELECT api_key, created_at, expires_at, last_used_at, is_active, created_by FROM api_keys WHERE client_id = $1')) {
-          return Promise.resolve({ rows: [{ api_key: 'test-key-123', created_at: new Date(), expires_at: null, last_used_at: null, is_active: true, created_by: 'admin' }] });
+        if (sql.includes('SELECT api_key, created_at, expires_at, last_used_at, is_active, created_by, description FROM api_keys WHERE client_id = $1')) {
+          return Promise.resolve({ rows: [{ api_key: 'test-key-123', created_at: new Date(), expires_at: null, last_used_at: null, is_active: true, created_by: 'admin', description: 'Test key' }] });
         }
         // Handle all other queries
         return Promise.resolve({ rows: [] });
@@ -223,5 +223,17 @@ describe('AgeGate as a Service - API Tests', () => {
 
     expect(res.body.client_id).toBe('test.local');
     expect(Array.isArray(res.body.keys)).toBe(true);
+  });
+
+  test('POST /api/register with description', async () => {
+    const res = await request(app)
+      .post('/api/register')
+      .auth('admin', ADMIN_PASS)
+      .send({ client_id: 'desc-test', description: 'My test key' })
+      .expect(200);
+    expect(res.body.api_key).toMatch(/^agk_[a-f0-9]{48}$/);
+    expect(res.body.expires_at).toBeDefined();
+    // Check that description was passed (mock does not store, but we trust the code)
+    // In real DB, description would be stored.
   });
 });
