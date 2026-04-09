@@ -83,6 +83,13 @@ jest.mock('pg', () => {
         if (sql.includes('UPDATE api_keys SET rate_limit = $1 WHERE api_key = $2 RETURNING client_id')) {
           return Promise.resolve({ rows: [{ client_id: 'rate-test' }] });
         }
+        // Handle UPDATE description
+        if (sql.includes('UPDATE api_keys SET description = $1 WHERE api_key = $2 RETURNING client_id')) {
+          if (params && params[1] === 'nonexistent') {
+            return Promise.resolve({ rows: [] });
+          }
+          return Promise.resolve({ rows: [{ client_id: 'desc-test' }] });
+        }
         // Handle all other queries
         return Promise.resolve({ rows: [] });
       }),
@@ -375,5 +382,41 @@ describe('AgeGate as a Service - API Tests', () => {
       .send({ rate_limit: 0 })
       .expect(400);
     expect(res.body.error).toContain('between 1 and 10000');
+  });
+
+  test('PATCH /api/keys/:api_key/description updates description', async () => {
+    // Register a key
+    const reg = await request(app)
+      .post('/api/register')
+      .auth('admin', ADMIN_PASS)
+      .send({ client_id: 'desc-test' })
+      .expect(200);
+    const apiKey = reg.body.api_key;
+
+    const res = await request(app)
+      .patch(`/api/keys/${apiKey}/description`)
+      .auth('admin', ADMIN_PASS)
+      .send({ description: 'New description' })
+      .expect(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.description).toBe('New description');
+  });
+
+  test('PATCH /api/keys/:api_key/description rejects invalid input', async () => {
+    const res = await request(app)
+      .patch('/api/keys/some-key/description')
+      .auth('admin', ADMIN_PASS)
+      .send({ description: 123 }) // not a string
+      .expect(400);
+    expect(res.body.error).toContain('must be a string');
+  });
+
+  test('PATCH /api/keys/:api_key/description returns 404 for nonexistent key', async () => {
+    const res = await request(app)
+      .patch('/api/keys/nonexistent/description')
+      .auth('admin', ADMIN_PASS)
+      .send({ description: 'test' })
+      .expect(404);
+    expect(res.body.error).toContain('API key not found');
   });
 });

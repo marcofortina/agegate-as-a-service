@@ -595,6 +595,23 @@ app.get('/dashboard', async (req, res) => {
       }
     }
 
+    async function editDescription(apiKey, currentDesc) {
+      const newDesc = prompt('Enter new description:', currentDesc);
+      if (newDesc === null) return;
+      const response = await fetch('/api/keys/' + apiKey + '/description', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: newDesc })
+      });
+      if (response.ok) {
+        alert('Description updated');
+        location.reload();
+      } else {
+        const err = await response.json();
+        alert('Failed to update description: ' + (err.error || 'Unknown error'));
+      }
+    }
+
     window.registerClient = registerClient;
     window.revokeKey = revokeKey;
     window.rotateKey = rotateKey;
@@ -615,8 +632,8 @@ app.get('/dashboard', async (req, res) => {
     html += `<tr>
       <td>${k.client_id}</td>
       <td><code>${k.api_key.substring(0,12)}...</code></td>
-      <td>${k.rate_limit}</td>
       <td>${k.description || '-'}</td>
+      <td>${k.rate_limit}</td>
       <td>${new Date(k.created_at).toLocaleString()}</td>
       <td>${k.expires_at ? new Date(k.expires_at).toLocaleString() : 'never'}</td>
       <td>${k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never'}</td>
@@ -624,10 +641,11 @@ app.get('/dashboard', async (req, res) => {
       <td>${k.is_active ? '✅ active' : '❌ revoked'}</td>
       <td>
          ${k.is_active ? `<button onclick="rotateKey('${k.api_key}')">Rotate</button>` : ''}
-         <button onclick="viewStats('${k.api_key}')">Stats</button>
+         <button onclick="revokeKey('${k.api_key}')">Revoke</button>
+	 <button onclick="editDescription('${k.api_key}', '${(k.description || '').replace(/'/g, "\\'")}')">Edit Desc</button>
        </td>
        <td>
-         <button onclick="revokeKey('${k.api_key}')">Revoke</button>
+         <button onclick="viewStats('${k.api_key}')">Stats</button>
       </td>
     </tr>`;
   });
@@ -798,6 +816,32 @@ app.patch('/api/keys/:api_key/rate-limit', async (req, res) => {
   const adminUser = getAdminUser(req);
   await logAdminAction(adminUser, 'UPDATE_RATE_LIMIT', api_key, { rate_limit });
   res.json({ success: true, client_id: result.rows[0].client_id, rate_limit });
+});
+
+// PATCH /api/keys/:api_key/description - Update description for an API key (admin only)
+app.patch('/api/keys/:api_key/description', async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { api_key } = req.params;
+  const { description } = req.body;
+  if (description === undefined || typeof description !== 'string') {
+    return res.status(400).json({ error: 'description must be a string' });
+  }
+  // Trim and limit length (optional)
+  const trimmedDesc = description.trim().slice(0, 255);
+  const result = await pool.query(
+    'UPDATE api_keys SET description = $1 WHERE api_key = $2 RETURNING client_id',
+    [trimmedDesc, api_key]
+  );
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: 'API key not found' });
+  }
+  const adminUser = getAdminUser(req);
+  await logAdminAction(adminUser, 'UPDATE_DESCRIPTION', api_key, { description: trimmedDesc });
+  res.json({
+    success: true,
+    client_id: result.rows[0].client_id,
+    description: trimmedDesc
+  });
 });
 
 // GET /api/keys/:client_id - List all API keys for a specific client (admin only)
