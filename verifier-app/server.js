@@ -160,6 +160,21 @@ async function checkRateLimit(req, apiKey) {
 
 // Initialize DB
 async function initDB() {
+  // Retry connecting to database (containers may not be ready)
+  let retries = 30;
+  let connected = false;
+  while (retries > 0 && !connected) {
+    try {
+      await pool.query('SELECT 1');
+      connected = true;
+    } catch (err) {
+      retries--;
+      if (retries === 0) throw err;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  // Now create tables
   await pool.query(`
     CREATE TABLE IF NOT EXISTS verifications (
       id SERIAL,
@@ -911,29 +926,46 @@ app.get('/onboarding', (req, res) => {
 });
 
 // ==================== SERVER START + GRACEFUL SHUTDOWN ====================
-let dbInitPromise = initDB().catch(err => logger.error(err, 'Database initialization failed'));
+let server;
 
-app.use(async (req, res, next) => {
-  await dbInitPromise;
-  next();
-});
+async function startServer() {
+  try {
+    await initDB();
+    logger.info('Database initialized');
 
-const server = app.listen(PORT, () => {
-  logger.info(`Age Gate as a Service v${require('./package.json').version} listening on port ${PORT}`);
-});
+    server = app.listen(PORT, () => {
+      logger.info(`Age Gate as a Service v${require('./package.json').version} listening on port ${PORT}`);
+    });
+
+  } catch (err) {
+    logger.error(err, 'Database initialization failed');
+    process.exit(1);
+  }
+}
+
+startServer();
+
+let shuttingDown = false;
 
 // Graceful shutdown
 const shutdown = async () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
   logger.info('SIGTERM/SIGINT received – closing gracefully');
-  server.close(async () => {
-    await pool.end();
-    await redis.quit();
-    logger.info('All connections closed');
+  if (server && server.listening) {
+    server.close(async () => {
+      await pool.end();
+      await redis.quit();
+      logger.info('All connections closed');
+      process.exit(0);
+    });
+  } else {
     process.exit(0);
-  });
+  }
 };
 
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-module.exports = { app, server, pool };
+module.exports = { app, getServer: () => server, pool };

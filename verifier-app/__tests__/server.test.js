@@ -118,7 +118,7 @@ jest.mock('prom-client', () => {
 jest.spyOn(Math, 'random').mockReturnValue(1);
 
 // NOW require app AFTER mocks
-const { app, server } = require('../server');
+const { app, getServer } = require('../server');
 
 describe('AgeGate as a Service - API Tests', () => {
   beforeEach(() => {
@@ -126,7 +126,10 @@ describe('AgeGate as a Service - API Tests', () => {
   });
 
   afterAll(async () => {
-    server.close();
+    const server = getServer();
+    if (server && typeof server.close === 'function') {
+      server.close();
+    }
     const Redis = require('ioredis');
     if (Redis.__mockInstance && Redis.__mockInstance.quit) {
       await Redis.__mockInstance.quit();
