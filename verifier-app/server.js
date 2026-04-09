@@ -370,6 +370,82 @@ app.post('/verify', async (req, res) => {
   }
 });
 
+// GET /stats - Client statistics (authenticated via API key)
+app.get('/stats', async (req, res) => {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey) {
+    logger.warn({ clientId: 'unknown' }, 'Missing API Key for stats');
+    return res.status(401).json({ status: 'error', message: 'Missing API Key' });
+  }
+
+  // Validate API key: exists, active, not expired
+  const keyCheck = await pool.query(
+    `SELECT client_id, expires_at, is_active FROM api_keys WHERE api_key = $1`,
+    [apiKey]
+  );
+  if (keyCheck.rows.length === 0 || !keyCheck.rows[0].is_active) {
+    logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Invalid or revoked API key for stats');
+    return res.status(401).json({ status: 'error', message: 'Invalid API key' });
+  }
+  const keyRecord = keyCheck.rows[0];
+  if (keyRecord.expires_at && new Date(keyRecord.expires_at) < new Date()) {
+    logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Expired API key for stats');
+    return res.status(401).json({ status: 'error', message: 'API key expired' });
+  }
+
+  // Apply rate limit for stats
+  if (!await checkRateLimit(req, apiKey)) {
+    logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Stats rate limit exceeded');
+    return res.status(429).json({ status: 'error', message: 'Stats rate limit exceeded (100 requests/min)' });
+  }
+
+  const clientId = keyRecord.client_id;
+
+  // Get global stats for this client
+  const totalResult = await pool.query(
+    `SELECT COUNT(*) as total FROM verifications WHERE client_id = $1 AND api_key = $2`,
+    [clientId, apiKey]
+  );
+  const total = parseInt(totalResult.rows[0].total);
+
+  const successResult = await pool.query(
+    `SELECT COUNT(*) as successful FROM verifications WHERE client_id = $1 AND api_key = $2 AND verified = true`,
+    [clientId, apiKey]
+  );
+  const successful = parseInt(successResult.rows[0].successful);
+  const successRate = total > 0 ? ((successful / total) * 100).toFixed(1) : 0;
+
+  // Last verification timestamp
+  const lastResult = await pool.query(
+    `SELECT MAX(timestamp) as last FROM verifications WHERE client_id = $1 AND api_key = $2`,
+    [clientId, apiKey]
+  );
+  const lastVerification = lastResult.rows[0].last;
+
+  // Optional: daily stats for last 7 days
+  const dailyResult = await pool.query(
+    `SELECT DATE(timestamp) as day, COUNT(*) as count
+     FROM verifications
+     WHERE client_id = $1 AND api_key = $2 AND timestamp > NOW() - INTERVAL '7 days'
+     GROUP BY day
+     ORDER BY day DESC`,
+    [clientId, apiKey]
+  );
+  const daily = dailyResult.rows.map(row => ({
+    date: row.day,
+    verifications: parseInt(row.count)
+  }));
+
+  res.json({
+    client_id: clientId,
+    total_verifications: total,
+    successful_verifications: successful,
+    success_rate: parseFloat(successRate),
+    last_verification: lastVerification,
+    daily_breakdown: daily
+  });
+});
+
 // Dashboard
 app.get('/dashboard', async (req, res) => {
   // Handle login from query param (first time login)
@@ -499,6 +575,19 @@ app.get('/dashboard', async (req, res) => {
       }
     }
 
+    async function viewStats(apiKey) {
+      try {
+        const response = await fetch('/stats', {
+          headers: { 'x-api-key': apiKey }
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const stats = await response.json();
+        alert(JSON.stringify(stats, null, 2));
+      } catch (err) {
+        alert('Failed to fetch stats: ' + err.message);
+      }
+    }
+
     window.registerClient = registerClient;
     window.revokeKey = revokeKey;
     window.rotateKey = rotateKey;
@@ -512,7 +601,7 @@ app.get('/dashboard', async (req, res) => {
   <div class="card">
     <h2>API Keys Management</h2>
     <table>
-       <tr><th>Client</th><th>API Key</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Success Rate</th><th>Status</th><th>Actions</th></tr>`;
+       <tr><th>Client</th><th>API Key</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Success Rate</th><th>Status</th><th>Actions</th><th>Stats</th></tr>`;
 
   keys.rows.forEach(k => {
     const successRate = rateMap[k.client_id] || '0';
@@ -526,6 +615,9 @@ app.get('/dashboard', async (req, res) => {
       <td>${k.is_active ? '✅ active' : '❌ revoked'}</td>
       <td>
          ${k.is_active ? `<button onclick="rotateKey('${k.api_key}')">Rotate</button>` : ''}
+         <button onclick="viewStats('${k.api_key}')">Stats</button>
+       </td>
+       <td>
          <button onclick="revokeKey('${k.api_key}')">Revoke</button>
       </td>
     </tr>`;

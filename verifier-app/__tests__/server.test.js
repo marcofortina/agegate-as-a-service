@@ -41,7 +41,7 @@ jest.mock('pg', () => {
           const key = params ? params[0] : null;
           // Recognized test keys
           if (key === 'test-key-123' || key === 'rate-limit-key') {
-            return Promise.resolve({ rows: [{ client_id: 'test', expires_at: null, is_active: true }] });
+            return Promise.resolve({ rows: [{ client_id: 'test.local', expires_at: null, is_active: true }] });
           }
           return Promise.resolve({ rows: [] });
         }
@@ -56,6 +56,18 @@ jest.mock('pg', () => {
         // Handle SELECT COUNT(*) FROM verifications (for dashboard)
         if (sql.includes('SELECT COUNT(*) as total FROM verifications')) {
           return Promise.resolve({ rows: [{ total: 42 }] });
+        }
+        if (sql.includes('SELECT COUNT(*) as successful')) {
+          return Promise.resolve({ rows: [{ successful: 30 }] });
+        }
+        if (sql.includes('SELECT MAX(timestamp) as last')) {
+          return Promise.resolve({ rows: [{ last: new Date().toISOString() }] });
+        }
+        if (sql.includes('SELECT DATE(timestamp) as day')) {
+          return Promise.resolve({ rows: [] });
+        }
+        if (sql.includes('WHERE created_by')) {
+          return Promise.resolve({ rows: [{ count: 0 }] });
         }
         // Handle all other queries
         return Promise.resolve({ rows: [] });
@@ -185,5 +197,15 @@ describe('AgeGate as a Service - API Tests', () => {
     const res = await request(app).get('/api-docs/');
     expect(res.status).toBe(200);
     expect(res.text).toContain('swagger');
+  });
+
+  test('GET /stats with valid API key', async () => {
+    const res = await request(app)
+      .get('/stats')
+      .set('x-api-key', 'test-key-123')
+      .expect(200);
+
+    expect(res.body.client_id).toBe('test.local');
+    expect(res.body.total_verifications).toBe(42);
   });
 });
