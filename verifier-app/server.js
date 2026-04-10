@@ -236,13 +236,34 @@ async function checkRateLimit(req, apiKey) {
   const limitRes = await pool.query('SELECT rate_limit FROM api_keys WHERE api_key = $1', [apiKey]);
   const limit = limitRes.rows[0]?.rate_limit || 100;
 
+  // Check daily limit (if set)
+  const dailyRes = await pool.query('SELECT daily_limit FROM api_keys WHERE api_key = $1', [apiKey]);
+  const dailyLimit = dailyRes.rows[0]?.daily_limit;
+  if (dailyLimit !== null && dailyLimit > 0) {
+    const today = new Date().toISOString().slice(0, 10);
+    const dailyKey = `daily:${apiKey}:${today}`;
+    const dailyCount = await redis.get(dailyKey);
+    const currentDaily = dailyCount ? parseInt(dailyCount) : 0;
+    if (currentDaily >= dailyLimit) {
+      logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Daily limit exceeded');
+      return { allowed: false, type: 'daily', limit: dailyLimit };
+    }
+    // Increment daily counter (with TTL until midnight)
+    const now = new Date();
+    const midnight = new Date(now);
+    midnight.setUTCHours(24, 0, 0, 0);
+    const ttlSeconds = Math.ceil((midnight - now) / 1000);
+    await redis.incr(dailyKey);
+    if (ttlSeconds > 0) await redis.expire(dailyKey, ttlSeconds);
+  }
+
   if (ttl === -1) await redis.expire(key, 60); // 1 minute window
 
   if (count > limit) {
     await redis.decr(key);
-    return false;
+    return { allowed: false, type: 'rate', limit: limit };
   }
-  return true;
+  return { allowed: true };
 }
 
 // Initialize DB
@@ -287,6 +308,7 @@ async function initDB() {
       last_used_at TIMESTAMPTZ,
       rate_limit INTEGER DEFAULT 100,
       description TEXT,
+      daily_limit INTEGER DEFAULT NULL,
       is_active BOOLEAN DEFAULT true,
       created_by TEXT
     );
@@ -457,9 +479,16 @@ app.post('/verify', async (req, res) => {
     return res.status(401).json({ status: 'error', message: 'API key expired' });
   }
 
-  if (!await checkRateLimit(req, apiKey)) {
-    logger.warn({ apiKey: apiKey.substring(0, 8) + '...', anonymizedIP: req.anonymizedIP }, 'Rate limit exceeded');
-    return res.status(429).json({ status: 'error', message: 'Rate limit exceeded (100 requests/min)' });
+  const rateCheck = await checkRateLimit(req, apiKey);
+  if (!rateCheck.allowed) {
+    if (rateCheck.type === 'daily') {
+      logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Daily limit exceeded');
+      return res.status(429).json({ status: 'error', message: `Daily limit exceeded (${rateCheck.limit} verifications/day)` });
+    } else {
+      // rate limit
+      logger.warn({ apiKey: apiKey.substring(0,8)+'...', anonymizedIP: req.anonymizedIP }, 'Rate limit exceeded');
+      return res.status(429).json({ status: 'error', message: `Rate limit exceeded (${rateCheck.limit} requests/min)` });
+    }
   }
 
   // Update last_used_at (async, don't await to avoid slowing response)
@@ -540,7 +569,7 @@ app.get('/stats', async (req, res) => {
   }
 
   // Apply rate limit for stats
-  if (!await checkRateLimit(req, apiKey)) {
+  if (!(await checkRateLimit(req, apiKey)).allowed) {
     logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Stats rate limit exceeded');
     return res.status(429).json({ status: 'error', message: 'Stats rate limit exceeded (100 requests/min)' });
   }
@@ -774,7 +803,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
 
   // Fetch API keys with status
   const keys = await pool.query(`
-    SELECT client_id, api_key, created_at, expires_at, last_used_at, is_active, description, rate_limit
+    SELECT client_id, api_key, created_at, expires_at, last_used_at, is_active, description, rate_limit, daily_limit
     FROM api_keys
     ORDER BY created_at DESC
   `);
@@ -906,6 +935,27 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
       }
     }
 
+    async function editDailyLimit(apiKey, currentLimit) {
+      let newLimit = prompt('Enter daily limit (positive integer) or leave empty for unlimited:', currentLimit === 'null' ? '' : currentLimit);
+      if (newLimit === null) return;
+      let dailyLimit = null;
+      if (newLimit.trim() !== '') {
+        const limitNum = parseInt(newLimit, 10);
+        if (isNaN(limitNum) || limitNum < 1) {
+          alert('Daily limit must be a positive integer');
+          return;
+        }
+        dailyLimit = limitNum;
+      }
+      const response = await fetch('/api/keys/' + apiKey + '/daily-limit', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
+        body: JSON.stringify({ daily_limit: dailyLimit })
+      });
+      if (response.ok) location.reload();
+      else alert('Failed to update daily limit');
+    }
+
     async function editDescription(apiKey, currentDesc) {
       const newDesc = prompt('Enter new description:', currentDesc);
       if (newDesc === null) return;
@@ -936,7 +986,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
   <div class="card">
     <h2>API Keys Management</h2>
     <table>
-      <th>Client</th><th>API Key</th><th>Description</th><th>Rate Limit</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Success Rate</th><th>Status</th><th>Actions</th><th>Stats</th>`;
+      <th>Client</th><th>API Key</th><th>Description</th><th>Rate Limit</th><th>Daily Limit</th><th>Created</th><th>Expires</th><th>Last Used</th><th>Success Rate</th><th>Status</th><th>Actions</th><th>Stats</th>`;
 
   keys.rows.forEach(k => {
     const successRate = rateMap[k.client_id] || '0';
@@ -947,6 +997,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
       <td><code>${k.api_key.substring(0,12)}...</code></td>
       <td>${k.description || '-'}</td>
       <td id="rate-limit-${k.api_key}">${k.rate_limit}</td>
+      <td id="daily-limit-${k.api_key}">${k.daily_limit !== null ? k.daily_limit : '∞'}</td>
       <td>${new Date(k.created_at).toLocaleString()}</td>
       <td>${k.expires_at ? new Date(k.expires_at).toLocaleString() : 'never'}</td>
       <td>${k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never'}</td>
@@ -955,6 +1006,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
       <td>
          ${k.is_active ? `<button onclick="rotateKey('${k.api_key}')">Rotate</button>` : ''}
          <button onclick="editRateLimit('${k.api_key}', ${k.rate_limit})">Edit Rate</button>
+         <button onclick="editDailyLimit('${k.api_key}', ${k.daily_limit !== null ? k.daily_limit : 'null'})">Edit Daily</button>
          <button onclick="revokeKey('${k.api_key}')">Revoke</button>
 	 <button onclick="editDescription('${k.api_key}', '${safeDesc}')">Edit Desc</button>
        </td>
@@ -1197,6 +1249,26 @@ app.patch('/api/keys/:api_key/rate-limit', csrfProtection, async (req, res) => {
   const adminUser = getAdminUser(req);
   await logAdminAction(adminUser, 'UPDATE_RATE_LIMIT', api_key, { rate_limit });
   res.json({ success: true, client_id: result.rows[0].client_id, rate_limit });
+});
+
+// PATCH /api/keys/:api_key/daily-limit - Update daily limit for an API key (admin only)
+app.patch('/api/keys/:api_key/daily-limit', csrfProtection, async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { api_key } = req.params;
+  const { daily_limit } = req.body;
+  if (daily_limit !== null && (!Number.isInteger(daily_limit) || daily_limit < 1)) {
+    return res.status(400).json({ error: 'daily_limit must be a positive integer or null' });
+  }
+  const result = await pool.query(
+    'UPDATE api_keys SET daily_limit = $1 WHERE api_key = $2 RETURNING client_id',
+    [daily_limit, api_key]
+  );
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: 'API key not found' });
+  }
+  const adminUser = getAdminUser(req);
+  await logAdminAction(adminUser, 'UPDATE_DAILY_LIMIT', api_key, { daily_limit });
+  res.json({ success: true, client_id: result.rows[0].client_id, daily_limit });
 });
 
 // PATCH /api/keys/:api_key/description - Update description for an API key (admin only)

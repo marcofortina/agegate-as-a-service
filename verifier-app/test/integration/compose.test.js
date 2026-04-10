@@ -177,6 +177,47 @@ describe('Integration Tests with docker-compose', () => {
     expect(statuses.filter(s => s === 200).length).toBe(100);
   });
 
+  test('Daily limit enforcement', async () => {
+    const csrfToken = await getCsrfToken();
+    const reg = await agent
+      .post('/api/register')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'daily-limit-test' })
+      .expect(200);
+    const apiKey = reg.body.api_key;
+
+    // Set daily limit to 2
+    await agent
+      .patch(`/api/keys/${apiKey}/daily-limit`)
+      .set('CSRF-Token', csrfToken)
+      .send({ daily_limit: 2 })
+      .expect(200);
+
+    // First request: should succeed
+    let res = await request(baseUrl)
+      .post('/verify')
+      .set('x-api-key', apiKey)
+      .send({ client_id: 'daily-limit-test', threshold: 18 })
+      .expect(200);
+    expect(res.body.verified).toBeDefined();
+
+    // Second request: should succeed
+    res = await request(baseUrl)
+      .post('/verify')
+      .set('x-api-key', apiKey)
+      .send({ client_id: 'daily-limit-test', threshold: 18 })
+      .expect(200);
+    expect(res.body.verified).toBeDefined();
+
+    // Third request: should be rate limited (daily)
+    res = await request(baseUrl)
+      .post('/verify')
+      .set('x-api-key', apiKey)
+      .send({ client_id: 'daily-limit-test', threshold: 18 })
+      .expect(429);
+    expect(res.body.message).toContain('Daily limit exceeded');
+  });
+
   test('Revoke API key', async () => {
     const csrfToken = await getCsrfToken();
 

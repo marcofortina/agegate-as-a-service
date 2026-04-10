@@ -106,6 +106,10 @@ jest.mock('pg', () => {
         if (sql.includes('UPDATE api_keys SET rate_limit = $1 WHERE api_key = $2 RETURNING client_id')) {
           return Promise.resolve({ rows: [{ client_id: 'rate-test' }] });
         }
+        // Handle UPDATE daily_limit
+        if (sql.includes('UPDATE api_keys SET daily_limit = $1 WHERE api_key = $2 RETURNING client_id')) {
+          return Promise.resolve({ rows: [{ client_id: 'daily-test' }] });
+        }
         // Handle UPDATE description
         if (sql.includes('UPDATE api_keys SET description = $1 WHERE api_key = $2 RETURNING client_id')) {
           if (params && params[1] === 'nonexistent') {
@@ -437,6 +441,34 @@ describe('AgeGate as a Service - API Tests', () => {
       .send({ rate_limit: 0 })
       .expect(400);
     expect(res.body.error).toContain('between 1 and 10000');
+  });
+
+  test('PATCH /api/keys/:api_key/daily-limit updates daily limit', async () => {
+    const csrfToken = await getCsrfToken();
+    const reg = await agent
+      .post('/api/register')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'daily-test' })
+      .expect(200);
+    const apiKey = reg.body.api_key;
+
+    const res = await agent
+      .patch(`/api/keys/${apiKey}/daily-limit`)
+      .set('CSRF-Token', csrfToken)
+      .send({ daily_limit: 500 })
+      .expect(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.daily_limit).toBe(500);
+  });
+
+  test('PATCH /api/keys/:api_key/daily-limit rejects invalid values', async () => {
+    const csrfToken = await getCsrfToken();
+    const res = await agent
+      .patch('/api/keys/some-key/daily-limit')
+      .set('CSRF-Token', csrfToken)
+      .send({ daily_limit: 0 })
+      .expect(400);
+    expect(res.body.error).toContain('positive integer');
   });
 
   test('PATCH /api/keys/:api_key/description updates description', async () => {

@@ -2,6 +2,10 @@
 
 Age Gate as a Service supports per‑key rate limiting. Each API key has a configurable limit of requests per minute (default 100).
 
+Additionally, you can set a **daily limit** (number of verifications per day) for each API key. This is useful to enforce quotas or prevent abuse over longer periods.
+
+Both limits are enforced in real time using Redis.
+
 ## How it works
 
 - The rate limit is enforced per `(api_key, anonymized_ip)` pair.
@@ -34,9 +38,21 @@ Update the rate limit for a specific API key.
 
 **Constraints:** `rate_limit` must be an integer between 1 and 10000.
 
+### `PATCH /api/keys/:api_key/daily-limit`
+
+Update the daily verification limit for a specific API key.
+
+**Request body:**
+```json
+{
+  "daily_limit": 500
+}
+```
+Use `null` to remove the limit (unlimited).
+
 ## Admin Dashboard
 
-In the admin dashboard, each API key row has an **Edit Rate** button. Clicking it opens a prompt where you can enter a new limit (between 1 and 10000). After confirmation, the page reloads and the new limit is displayed in the table.
+In the admin dashboard, each API key row has **Edit Rate** and **Edit Daily** buttons. Clicking them opens a prompt to set the respective limit. The current daily limit is shown in the "Daily Limit" column (∞ for unlimited).
 
 The rate limit is also displayed in the dedicated column.
 
