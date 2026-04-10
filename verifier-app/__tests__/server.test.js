@@ -517,4 +517,51 @@ describe('AgeGate as a Service - API Tests', () => {
       .expect(200);
     expect(res.text).toContain('Age Gate Client Dashboard');
   });
+
+  test('POST /api/webhook sets webhook URL', async () => {
+    const csrfToken = await getCsrfToken();
+
+    const res = await agent
+      .post('/api/webhook')
+      .auth('admin', ADMIN_PASS)
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'test-client', url: 'https://example.com/callback' })
+      .expect(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.url).toBe('https://example.com/callback');
+  });
+
+  test('POST /api/webhook rejects invalid URL', async () => {
+    const csrfToken = await getCsrfToken();
+
+    const res = await agent
+      .post('/api/webhook')
+      .auth('admin', ADMIN_PASS)
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'test-client', url: 'not-a-url' })
+      .expect(400);
+    expect(res.body.error).toContain('Invalid URL');
+  });
+
+  test('DELETE /api/webhook/:client_id removes webhook', async () => {
+    const csrfToken = await getCsrfToken();
+
+    await agent
+      .delete('/api/webhook/test-client')
+      .auth('admin', ADMIN_PASS)
+      .set('CSRF-Token', csrfToken)
+      .expect(200);
+    // For unit test, we trust the mock; no further check needed
+  });
+
+  test('GET /api/webhooks returns list', async () => {
+    const csrfToken = await getCsrfToken();
+
+    const res = await agent
+      .get('/api/webhooks')
+      .set('CSRF-Token', csrfToken)
+      .auth('admin', ADMIN_PASS)
+      .expect(200);
+    expect(Array.isArray(res.body.webhooks)).toBe(true);
+  });
 });

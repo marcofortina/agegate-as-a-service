@@ -238,6 +238,16 @@ async function initDB() {
     );
   `);
 
+  // Webhooks table for client callbacks
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS webhooks (
+      client_id TEXT PRIMARY KEY,
+      url TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
   // Set retention policy (default: 30 days)
   const retentionDays = parseInt(process.env.RETENTION_DAYS || '30');
   if (retentionDays > 0) {
@@ -283,6 +293,29 @@ function isAdmin(req, checkCookie = true) {
   const credentials = Buffer.from(authHeader.split(' ')[1], 'base64').toString();
   const [user, pass] = credentials.split(':');
   return user === ADMIN_USER && pass === ADMIN_PASS;
+}
+
+// Helper to send webhook notification (fire and forget)
+async function sendWebhook(clientId, verificationResult) {
+  const result = await pool.query('SELECT url FROM webhooks WHERE client_id = $1', [clientId]);
+  if (result.rows.length === 0) return;
+  const url = result.rows[0].url;
+  const payload = {
+    event: 'verification.completed',
+    client_id: clientId,
+    verified: verificationResult.verified,
+    threshold: verificationResult.threshold,
+    timestamp: verificationResult.timestamp,
+    proofType: verificationResult.proofType
+  };
+  // Use fetch (Node.js 18+) – don't await to avoid blocking
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).catch(err => {
+    logger.error({ err, clientId, url }, 'Webhook delivery failed');
+  });
 }
 
 // Input validation schema
@@ -371,6 +404,9 @@ app.post('/verify', async (req, res) => {
       `INSERT INTO verifications (client_id, api_key, threshold, timestamp, verified) VALUES ($1, $2, $3, $4, $5)`,
       [clientId, apiKey, threshold, timestamp, verified]
     );
+
+    // Send webhook asynchronously (fire and forget)
+    sendWebhook(clientId, { verified, threshold, timestamp, proofType: backend === 'eidas' ? 'eIDAS2.0' : 'mock' });
 
     const duration = (Date.now() - start) / 1000;
 
@@ -852,6 +888,8 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
 
   keys.rows.forEach(k => {
     const successRate = rateMap[k.client_id] || '0';
+    const safeDesc = (k.description || '').replace(/'/g, "\\'");
+
     html += `<tr>
       <td>${k.client_id}</td>
       <td><code>${k.api_key.substring(0,12)}...</code></td>
@@ -866,7 +904,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
          ${k.is_active ? `<button onclick="rotateKey('${k.api_key}')">Rotate</button>` : ''}
          <button onclick="editRateLimit('${k.api_key}', ${k.rate_limit})">Edit Rate</button>
          <button onclick="revokeKey('${k.api_key}')">Revoke</button>
-	 <button onclick="editDescription('${k.api_key}', '${(k.description || '').replace(/'/g, "\\'")}')">Edit Desc</button>
+	 <button onclick="editDescription('${k.api_key}', '${safeDesc}')">Edit Desc</button>
        </td>
        <td>
          <button onclick="viewStats('${k.api_key}')">Stats</button>
@@ -899,6 +937,77 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
   });
   html += `</table>
   </div>
+
+  <div class="card">
+    <h2>Webhook Management</h2>
+    <button onclick="showAddWebhook()">Add Webhook</button>
+    <table id="webhooksTable">
+      <thead>
+        <tr><th>Client ID</th><th>URL</th><th>Created</th><th>Updated</th><th>Actions</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    async function loadWebhooks() {
+      const response = await fetch('/api/webhooks', {
+        headers: { 'CSRF-Token': window.csrfToken }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const tbody = document.querySelector('#webhooksTable tbody');
+        tbody.innerHTML = '';
+        for (const w of data.webhooks) {
+          const row = tbody.insertRow();
+          row.insertCell(0).innerText = w.client_id;
+          row.insertCell(1).innerText = w.url;
+          row.insertCell(2).innerText = new Date(w.created_at).toLocaleString();
+          row.insertCell(3).innerText = new Date(w.updated_at).toLocaleString();
+          const actionsCell = row.insertCell(4);
+          const deleteBtn = document.createElement('button');
+          deleteBtn.innerText = 'Delete';
+          deleteBtn.onclick = () => deleteWebhook(w.client_id);
+          actionsCell.appendChild(deleteBtn);
+        }
+      }
+    }
+
+    async function showAddWebhook() {
+      const clientId = prompt('Enter client ID:');
+      if (!clientId) return;
+      const url = prompt('Enter webhook URL (https://...):');
+      if (!url) return;
+      const response = await fetch('/api/webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
+        body: JSON.stringify({ client_id: clientId, url })
+      });
+      if (response.ok) {
+        alert('Webhook added/updated');
+        loadWebhooks();
+      } else {
+        alert('Failed to add webhook');
+      }
+    }
+
+    async function deleteWebhook(clientId) {
+      if (!confirm('Delete webhook for ' + clientId + '?')) return;
+      const response = await fetch('/api/webhook/' + clientId, {
+        method: 'DELETE',
+        headers: { 'CSRF-Token': window.csrfToken }
+      });
+      if (response.ok) {
+        alert('Webhook deleted');
+        loadWebhooks();
+      } else {
+        alert('Failed to delete webhook');
+      }
+    }
+
+    // Load webhooks when page loads
+    loadWebhooks();
+  </script>
 
   <a href="/logout">Logout</a>
 </body>
@@ -1066,6 +1175,45 @@ app.patch('/api/keys/:api_key/description', csrfProtection, async (req, res) => 
     client_id: result.rows[0].client_id,
     description: trimmedDesc
   });
+});
+
+// GET /api/webhooks - List all webhooks (admin only)
+app.get('/api/webhooks', csrfProtection, async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const result = await pool.query('SELECT client_id, url, created_at, updated_at FROM webhooks ORDER BY client_id');
+  res.json({ webhooks: result.rows });
+});
+
+// Webhook management endpoint (admin only)
+app.post('/api/webhook', csrfProtection, async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { client_id, url } = req.body;
+  if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+  if (!url || typeof url !== 'string') return res.status(400).json({ error: 'url must be a string' });
+  // Basic URL validation
+  try {
+    new URL(url);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL' });
+  }
+  await pool.query(
+    `INSERT INTO webhooks (client_id, url, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (client_id) DO UPDATE SET url = EXCLUDED.url, updated_at = NOW()`,
+    [client_id, url]
+  );
+  const adminUser = getAdminUser(req);
+  await logAdminAction(adminUser, 'SET_WEBHOOK', client_id, { url });
+  res.json({ success: true, client_id, url });
+});
+
+// Optional: DELETE /api/webhook/:client_id to remove webhook
+app.delete('/api/webhook/:client_id', csrfProtection, async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { client_id } = req.params;
+  await pool.query('DELETE FROM webhooks WHERE client_id = $1', [client_id]);
+  const adminUser = getAdminUser(req);
+  await logAdminAction(adminUser, 'DELETE_WEBHOOK', client_id, {});
+  res.json({ success: true, client_id });
 });
 
 // GET /api/keys/:client_id - List all API keys for a specific client (admin only)

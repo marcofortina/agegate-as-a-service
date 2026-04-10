@@ -2,9 +2,12 @@ const { execSync, spawn } = require('child_process');
 const path = require('path');
 const request = require('supertest');
 const waitOn = require('wait-on');
+const http = require('http');
 
 let serverProcess;
 let baseUrl = 'http://localhost:8082';
+let webhookServer;
+let webhookReceived = false;
 
 const agent = request.agent(baseUrl);
 
@@ -31,8 +34,28 @@ beforeAll(async () => {
   const serverPath = path.join(__dirname, '../../server.js');
   serverProcess = spawn('node', [serverPath], { env: process.env, stdio: 'ignore' });
 
+  // Ensure any previous webhook server is closed
+  if (webhookServer) webhookServer.close();
+
+  // Start a mock webhook server
+  webhookServer = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      webhookReceived = true;
+      console.log('Webhook received:', body);
+      res.writeHead(200);
+      res.end();
+    });
+  });
+  webhookServer.listen(8090);
+  // Give it time to start
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
   // Wait for the app to be ready
   await waitOn({ resources: [`http-get://localhost:8082/ready`], timeout: 30000 });
+
+  // Register webhook for the test client (will be done inside a test)
 }, 60000);
 
 afterAll(() => {
@@ -83,6 +106,32 @@ describe('Integration Tests with docker-compose', () => {
       .send({ client_id: clientId, threshold: 18 })
       .expect(200);
     expect(res.body.verified).toBeDefined();
+  });
+
+  test('Register webhook', async () => {
+    const csrfToken = await getCsrfToken();
+    console.log('Registering webhook for client', clientId);
+    await agent
+      .post('/api/webhook')
+      .set('CSRF-Token', csrfToken)
+      .auth('admin', 'admin123')
+      .send({ client_id: clientId, url: 'http://localhost:8090/webhook' })
+      .expect(200);
+  });
+
+  test('Webhook is called on verification', async () => {
+    // Perform a verification to trigger the webhook
+    webhookReceived = false; // reset flag
+    console.log('Triggering verification for client', clientId);
+    const res = await request(baseUrl)
+      .post('/verify')
+      .set('x-api-key', apiKey)
+      .send({ client_id: clientId, threshold: 18 })
+      .expect(200);
+    expect(res.body.verified).toBeDefined();
+    // Wait a bit for the webhook to be delivered asynchronously
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    expect(webhookReceived).toBe(true);
   });
 
   test('Age verification with invalid API key', async () => {
@@ -187,5 +236,13 @@ describe('Integration Tests with docker-compose', () => {
       .set('x-api-key', apiKey)
       .expect(200);
     expect(res.body.total_verifications).toBeDefined();
+  });
+
+  test('Admin dashboard contains Webhook Management section', async () => {
+    const res = await request(baseUrl)
+      .get('/dashboard')
+      .auth('admin', 'admin123')
+      .expect(200);
+    expect(res.text).toContain('Webhook Management');
   });
 });
