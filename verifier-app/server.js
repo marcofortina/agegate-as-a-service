@@ -16,6 +16,7 @@ const app = express();
 const helmet = require('helmet');
 const cors = require('cors');
 const { z } = require('zod');
+const csrf = require('csurf');
 
 const { anonymizeIPMiddleware } = require('./proxy');
 const { setRedisClient } = require('./proxy');
@@ -27,6 +28,12 @@ app.use(anonymizeIPMiddleware({
   enabled: anonymizeIP,
   passthroughOnError: process.env.NODE_ENV === 'development'
 }));
+
+// CSRF protection (only for admin routes)
+let csrfProtection = csrf({
+  cookie: true,
+  ignoreMethods: ['GET', 'HEAD', 'OPTIONS']
+});
 
 app.use(cookieParser());
 app.use(express.json({ limit: '10kb' }));
@@ -641,7 +648,7 @@ app.post('/client/rotate', async (req, res) => {
 });
 
 // Dashboard
-app.get('/dashboard', async (req, res) => {
+app.get('/dashboard', csrfProtection, async (req, res) => {
   // Handle login from query param (first time login)
   const authHeader = req.headers.authorization;
 
@@ -709,6 +716,9 @@ app.get('/dashboard', async (req, res) => {
     LIMIT 20
   `);
 
+  // Generate CSRF token
+  const csrfToken = req.csrfToken ? req.csrfToken() : '';
+
   let html = `<!DOCTYPE html>
 <html>
 <head>
@@ -723,6 +733,8 @@ app.get('/dashboard', async (req, res) => {
   </style>
 </head>
 <body>
+  <meta name="csrf-token" content="${csrfToken}">
+  <script> window.csrfToken = '${csrfToken}'; </script>
   <script>
     // Define functions before any button uses them
     async function registerClient() {
@@ -731,7 +743,7 @@ app.get('/dashboard', async (req, res) => {
       if (!clientId) return alert('Client ID is required');
       const response = await fetch('/api/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ client_id: clientId, description: description || undefined })
       });
       const data = await response.json();
@@ -743,7 +755,7 @@ app.get('/dashboard', async (req, res) => {
       if (!confirm('Revoke this API Key permanently?')) return;
       const response = await fetch('/api/revoke', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ api_key: apiKey })
       });
       if (response.ok) {
@@ -758,7 +770,7 @@ app.get('/dashboard', async (req, res) => {
       if (!confirm('Generate a new API Key and revoke the old one?')) return;
       const response = await fetch('/api/rotate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ api_key: apiKey })
       });
       const data = await response.json();
@@ -773,7 +785,8 @@ app.get('/dashboard', async (req, res) => {
     async function viewStats(apiKey) {
       try {
         const response = await fetch('/stats', {
-          headers: { 'x-api-key': apiKey }
+          method: 'GET',
+          headers: { 'x-api-key': apiKey, 'CSRF-Token': window.csrfToken }
         });
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const stats = await response.json();
@@ -793,7 +806,7 @@ app.get('/dashboard', async (req, res) => {
       }
       const response = await fetch('/api/keys/' + apiKey + '/rate-limit', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ rate_limit: limitNum })
       });
       if (response.ok) {
@@ -810,7 +823,7 @@ app.get('/dashboard', async (req, res) => {
       if (newDesc === null) return;
       const response = await fetch('/api/keys/' + apiKey + '/description', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ description: newDesc })
       });
       if (response.ok) {
@@ -902,7 +915,7 @@ async function isAdminWithAuth(authHeader) {
 }
 
 // Admin endpoints
-app.post('/api/register', (req, res) => {
+app.post('/api/register', csrfProtection, (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { client_id, description } = req.body;
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
@@ -936,7 +949,7 @@ app.post('/api/register', (req, res) => {
   attempt();
 });
 
-app.post('/api/revoke', async (req, res) => {
+app.post('/api/revoke', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'api_key is required' });
@@ -952,7 +965,7 @@ app.post('/api/revoke', async (req, res) => {
 });
 
 // Rotate API key: generate new, revoke old
-app.post('/api/rotate', async (req, res) => {
+app.post('/api/rotate', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'api_key is required' });
@@ -1010,7 +1023,7 @@ app.post('/api/rotate', async (req, res) => {
 });
 
 // PATCH /api/keys/:api_key/rate-limit - Update rate limit for an API key (admin only)
-app.patch('/api/keys/:api_key/rate-limit', async (req, res) => {
+app.patch('/api/keys/:api_key/rate-limit', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { api_key } = req.params;
   const { rate_limit } = req.body;
@@ -1030,7 +1043,7 @@ app.patch('/api/keys/:api_key/rate-limit', async (req, res) => {
 });
 
 // PATCH /api/keys/:api_key/description - Update description for an API key (admin only)
-app.patch('/api/keys/:api_key/description', async (req, res) => {
+app.patch('/api/keys/:api_key/description', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { api_key } = req.params;
   const { description } = req.body;
@@ -1082,6 +1095,13 @@ app.get('/api/keys/:client_id', async (req, res) => {
 app.get('/logout', (req, res) => {
   res.clearCookie('admin_auth');
   res.redirect('/login');
+});
+
+// CSRF token endpoint for browser and tests
+app.get('/csrf-token', csrfProtection, (req, res) => {
+  res.json({
+    csrfToken: req.csrfToken()
+  });
 });
 
 // Metrics
@@ -1140,7 +1160,9 @@ async function startServer() {
   }
 }
 
-startServer();
+if (require.main === module) {
+  startServer();
+}
 
 let shuttingDown = false;
 

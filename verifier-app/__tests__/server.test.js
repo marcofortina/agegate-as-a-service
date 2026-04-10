@@ -139,6 +139,20 @@ jest.spyOn(Math, 'random').mockReturnValue(1);
 // NOW require app AFTER mocks
 const { app, getServer } = require('../server');
 
+// Supertest agent to handle cookies for CSRF
+const agent = request.agent(app);
+
+beforeAll(async () => {
+  // Warm up the app to initialize csurf without triggering heavy dashboard queries
+  await agent.get('/health').expect(200);
+});
+
+// helper to fetch real CSRF token
+async function getCsrfToken() {
+  const res = await agent.get('/csrf-token').expect(200);
+  return res.body.csrfToken;
+}
+
 describe('AgeGate as a Service - API Tests', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -263,8 +277,11 @@ describe('AgeGate as a Service - API Tests', () => {
   });
 
   test('POST /api/register with description', async () => {
-    const res = await request(app)
+    const csrfToken = await getCsrfToken();
+
+    const res = await agent
       .post('/api/register')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ client_id: 'desc-test', description: 'My test key' })
       .expect(200);
@@ -298,8 +315,11 @@ describe('AgeGate as a Service - API Tests', () => {
 
     pool.query = mockQuery;
 
-    const res = await request(app)
+    const csrfToken = await getCsrfToken();
+
+    const res = await agent
       .post('/api/register')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ client_id: 'collision-test', description: 'retry test' })
       .expect(200);
@@ -347,16 +367,19 @@ describe('AgeGate as a Service - API Tests', () => {
     pool.query = mockQuery;
 
     // Register a key
-    const reg = await request(app)
+    const csrfToken = await getCsrfToken();
+    const reg = await agent
       .post('/api/register')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ client_id: 'rotate-test' })
       .expect(200);
     registeredKey = reg.body.api_key;
 
     // Rotate
-    const res = await request(app)
+    const res = await agent
       .post('/api/rotate')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ api_key: registeredKey })
       .expect(200);
@@ -377,15 +400,19 @@ describe('AgeGate as a Service - API Tests', () => {
 
   test('PATCH /api/keys/:api_key/rate-limit updates rate limit', async () => {
     // Register a key
-    const reg = await request(app)
+    const csrfToken = await getCsrfToken();
+
+    const reg = await agent
       .post('/api/register')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ client_id: 'rate-test' })
       .expect(200);
     const apiKey = reg.body.api_key;
 
-    const res = await request(app)
+    const res = await agent
       .patch(`/api/keys/${apiKey}/rate-limit`)
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ rate_limit: 200 })
       .expect(200);
@@ -398,8 +425,11 @@ describe('AgeGate as a Service - API Tests', () => {
 
   // Additional test: invalid rate_limit
   test('PATCH /api/keys/:api_key/rate-limit rejects invalid values', async () => {
-    const res = await request(app)
+    const csrfToken = await getCsrfToken();
+
+    const res = await agent
       .patch('/api/keys/some-key/rate-limit')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ rate_limit: 0 })
       .expect(400);
@@ -407,16 +437,20 @@ describe('AgeGate as a Service - API Tests', () => {
   });
 
   test('PATCH /api/keys/:api_key/description updates description', async () => {
+    const csrfToken = await getCsrfToken();
+
     // Register a key
-    const reg = await request(app)
+    const reg = await agent
       .post('/api/register')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ client_id: 'desc-test' })
       .expect(200);
     const apiKey = reg.body.api_key;
 
-    const res = await request(app)
+    const res = await agent
       .patch(`/api/keys/${apiKey}/description`)
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ description: 'New description' })
       .expect(200);
@@ -425,8 +459,11 @@ describe('AgeGate as a Service - API Tests', () => {
   });
 
   test('PATCH /api/keys/:api_key/description rejects invalid input', async () => {
-    const res = await request(app)
+    const csrfToken = await getCsrfToken();
+
+    const res = await agent
       .patch('/api/keys/some-key/description')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ description: 123 }) // not a string
       .expect(400);
@@ -434,8 +471,11 @@ describe('AgeGate as a Service - API Tests', () => {
   });
 
   test('PATCH /api/keys/:api_key/description returns 404 for nonexistent key', async () => {
-    const res = await request(app)
+    const csrfToken = await getCsrfToken();
+
+    const res = await agent
       .patch('/api/keys/nonexistent/description')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', ADMIN_PASS)
       .send({ description: 'test' })
       .expect(404);

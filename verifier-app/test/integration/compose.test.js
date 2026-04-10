@@ -6,6 +6,8 @@ const waitOn = require('wait-on');
 let serverProcess;
 let baseUrl = 'http://localhost:8082';
 
+const agent = request.agent(baseUrl);
+
 beforeAll(async () => {
   // Start containers
   execSync('docker-compose -f docker-compose.test.yml up -d', { stdio: 'inherit' });
@@ -42,6 +44,11 @@ describe('Integration Tests with docker-compose', () => {
   let apiKey;
   const clientId = 'test-integration-client';
 
+  async function getCsrfToken() {
+    const res = await agent.get('/csrf-token').expect(200);
+    return res.body.csrfToken;
+  }
+
   test('Health check', async () => {
     const res = await request(baseUrl).get('/health');
     expect(res.status).toBe(200);
@@ -56,8 +63,11 @@ describe('Integration Tests with docker-compose', () => {
   });
 
   test('Register a new client', async () => {
-    const res = await request(baseUrl)
+    const csrfToken = await getCsrfToken();
+
+    const res = await agent
       .post('/api/register')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', 'admin123')
       .send({ client_id: clientId })
       .expect(200);
@@ -85,8 +95,11 @@ describe('Integration Tests with docker-compose', () => {
   });
 
   test('Rate limiting', async () => {
-    const rateRes = await request(baseUrl)
+    const csrfToken = await getCsrfToken();
+
+    const rateRes = await agent
       .post('/api/register')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', 'admin123')
       .send({ client_id: clientId })
       .expect(200);
@@ -111,8 +124,11 @@ describe('Integration Tests with docker-compose', () => {
   });
 
   test('Revoke API key', async () => {
-    await request(baseUrl)
+    const csrfToken = await getCsrfToken();
+
+    await agent
       .post('/api/revoke')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', 'admin123')
       .send({ api_key: apiKey })
       .expect(200);
@@ -128,15 +144,19 @@ describe('Integration Tests with docker-compose', () => {
   });
 
   test('Rotate API key', async () => {
-    const reg = await request(baseUrl)
+    const csrfToken = await getCsrfToken();
+
+    const reg = await agent
       .post('/api/register')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', 'admin123')
       .send({ client_id: clientId })
       .expect(200);
     const oldKey = reg.body.api_key;
 
-    const rotateRes = await request(baseUrl)
+    const rotateRes = await agent
       .post('/api/rotate')
+      .set('CSRF-Token', csrfToken)
       .auth('admin', 'admin123')
       .send({ api_key: oldKey })
       .expect(200);
