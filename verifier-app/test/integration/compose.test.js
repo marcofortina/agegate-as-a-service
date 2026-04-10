@@ -285,4 +285,23 @@ describe('Integration Tests with docker-compose', () => {
     const res = await agent.get('/dashboard').expect(200);
     expect(res.text).toContain('Webhook Management');
   });
+
+  test('Export CSV compliance report', async () => {
+    const csrfToken = await getCsrfToken();
+    const res = await agent
+      .get('/api/export/compliance?format=csv')
+      .set('CSRF-Token', csrfToken)
+      .expect(200);
+    expect(res.headers['content-type']).toMatch(/^text\/csv/);
+    expect(res.text).toContain('client_id');
+  });
+
+  test('Export PDF compliance report', async () => {
+    const csrfToken = await getCsrfToken();
+    const res = await agent
+      .get('/api/export/compliance?format=pdf')
+      .set('CSRF-Token', csrfToken)
+      .expect(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+  });
 });

@@ -10,6 +10,7 @@ const Redis = require('ioredis');
 const pino = require('pino');
 const prometheus = require('prom-client');
 const session = require('express-session');
+const PDFDocument = require('pdfkit');
 
 const app = express();
 
@@ -1113,6 +1114,52 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
     loadWebhooks();
   </script>
 
+  <div class="card">
+    <h2>AGCOM Compliance Export</h2>
+    <label>Format:</label>
+    <select id="exportFormat">
+      <option value="csv">CSV</option>
+      <option value="pdf">PDF</option>
+    </select>
+    <label>Client ID (optional):</label>
+    <input type="text" id="exportClientId" placeholder="Leave empty for all">
+    <label>From date (YYYY-MM-DD):</label>
+    <input type="date" id="exportFrom">
+    <label>To date (YYYY-MM-DD):</label>
+    <input type="date" id="exportTo">
+    <button onclick="exportCompliance()">Export Report</button>
+  </div>
+
+  <script>
+    async function exportCompliance() {
+      const format = document.getElementById('exportFormat').value;
+      const clientId = document.getElementById('exportClientId').value.trim();
+      const from = document.getElementById('exportFrom').value;
+      const to = document.getElementById('exportTo').value;
+      let url = '/api/export/compliance?format=' + format;
+      if (clientId) url += '&client_id=' + encodeURIComponent(clientId);
+      if (from) url += '&from=' + from;
+      if (to) url += '&to=' + to;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'CSRF-Token': window.csrfToken }
+      });
+      if (response.ok) {
+        const blob = await response.blob();
+        const downloadUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = 'agcom_export.' + format;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(downloadUrl);
+      } else {
+        alert('Export failed');
+      }
+    }
+  </script>
+
   <a href="/logout">Logout</a>
 </body>
 </html>`;
@@ -1334,6 +1381,128 @@ app.delete('/api/webhook/:client_id', csrfProtection, async (req, res) => {
   const adminUser = getAdminUser(req);
   await logAdminAction(adminUser, 'DELETE_WEBHOOK', client_id, {});
   res.json({ success: true, client_id });
+});
+
+// GET /api/export/compliance - Export verifications for AGCOM (admin only)
+app.get('/api/export/compliance', csrfProtection, async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { format, from, to, client_id } = req.query;
+  if (!['csv', 'pdf'].includes(format)) {
+    return res.status(400).json({ error: 'format must be csv or pdf' });
+  }
+
+  let query = `
+    SELECT
+      client_id,
+      DATE(timestamp) as date,
+      COUNT(*) as total_verifications,
+      SUM(CASE WHEN verified THEN 1 ELSE 0 END) as successful,
+      AVG(threshold) as avg_threshold
+    FROM verifications
+    WHERE 1=1
+  `;
+  const params = [];
+  if (client_id) {
+    params.push(client_id);
+    query += ` AND client_id = $${params.length}`;
+  }
+  if (from) {
+    params.push(from);
+    query += ` AND timestamp >= $${params.length}`;
+  }
+  if (to) {
+    params.push(to);
+    query += ` AND timestamp <= $${params.length}`;
+  }
+  query += ` GROUP BY client_id, DATE(timestamp) ORDER BY date DESC, client_id`;
+
+  const result = await pool.query(query, params);
+  const rows = result.rows;
+
+  if (format === 'csv') {
+    // Generate CSV
+    const csvData = rows.map(row => ({
+      client_id: row.client_id,
+      date: row.date.toISOString().slice(0,10),
+      total_verifications: row.total_verifications,
+      successful: row.successful,
+      success_rate: row.total_verifications > 0 ? (row.successful / row.total_verifications * 100).toFixed(2) : 0,
+      avg_threshold: parseFloat(row.avg_threshold).toFixed(1)
+    }));
+    const header = ['client_id','date','total_verifications','successful','success_rate','avg_threshold'];
+    const csv = [header.join(',')];
+    for (const row of csvData) {
+      csv.push(header.map(h => JSON.stringify(row[h])).join(','));
+    }
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="agcom_export.csv"');
+    return res.send(csv.join('\n'));
+  } else if (format === 'pdf') {
+    // Generate PDF
+    const doc = new PDFDocument({ margin: 50 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="agcom_export.pdf"');
+    doc.pipe(res);
+    doc.fontSize(18).text('AGCOM Compliance Report', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(10).text(`Generated: ${new Date().toISOString()}`);
+    doc.moveDown();
+    if (client_id) doc.text(`Client ID: ${client_id}`);
+    if (from) doc.text(`From: ${from}`);
+    if (to) doc.text(`To: ${to}`);
+    doc.moveDown();
+
+    if (rows.length === 0) {
+      doc.text('No data available for the selected criteria.', 50, doc.y);
+      doc.end();
+      return;
+    }
+
+    // Define table columns with fixed widths
+    const colDefs = [
+      { header: 'Client ID', width: 100, align: 'left', getter: (r) => r.client_id },
+      { header: 'Date', width: 80, align: 'left', getter: (r) => r.date.toISOString().slice(0,10) },
+      { header: 'Total', width: 50, align: 'right', getter: (r) => r.total_verifications },
+      { header: 'Successful', width: 70, align: 'right', getter: (r) => r.successful },
+      { header: 'Success Rate', width: 80, align: 'right', getter: (r) =>
+        r.total_verifications > 0 ? ((r.successful / r.total_verifications) * 100).toFixed(2) + '%' : '0%' },
+      { header: 'Avg Threshold', width: 80, align: 'right', getter: (r) => parseFloat(r.avg_threshold).toFixed(1) }
+    ];
+
+    const tableTop = doc.y;
+    const rowHeight = 18;
+    const headerHeight = 20;
+    const startX = 50;
+    let x = startX;
+
+    // Draw header background (light gray) and ensure text is black
+    doc.fillColor('#dddddd').rect(startX, tableTop, 500, headerHeight).fill();
+    doc.fillColor('black');
+    doc.font('Helvetica-Bold').fontSize(9);
+    x = startX;
+    colDefs.forEach(col => {
+      doc.text(col.header, x, tableTop + 5, { width: col.width, align: col.align });
+      x += col.width;
+    });
+
+    doc.font('Helvetica').fontSize(8);
+    let y = tableTop + headerHeight;
+    rows.forEach(row => {
+      // No background fill for rows to ensure maximum contrast
+      // (text is black on white background)
+      doc.fillColor('black');
+      x = startX;
+      colDefs.forEach(col => {
+        const cellText = String(col.getter(row));
+        doc.text(cellText, x, y + 4, { width: col.width, align: col.align });
+        x += col.width;
+      });
+      y += rowHeight;
+    });
+
+    doc.strokeColor('black').rect(startX, tableTop, 500, headerHeight + rows.length * rowHeight).stroke();
+    doc.end();
+  }
 });
 
 // GET /api/keys/:client_id - List all API keys for a specific client (admin only)

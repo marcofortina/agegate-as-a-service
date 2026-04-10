@@ -91,6 +91,11 @@ jest.mock('pg', () => {
         if (sql.includes('SELECT DATE(timestamp) as day')) {
           return Promise.resolve({ rows: [] });
         }
+        // Handle export query (aggregated)
+        if (sql.includes('SELECT client_id, DATE(timestamp) as date, COUNT(*) as total_verifications, SUM(CASE WHEN verified THEN 1 ELSE 0 END) as successful, AVG(threshold) as avg_threshold FROM verifications')) {
+          // Return a mock aggregated row
+          return Promise.resolve({ rows: [{ client_id: 'test.local', date: new Date().toISOString().slice(0,10), total_verifications: 10, successful: 9, avg_threshold: 18.0 }] });
+        }
         // Handle SELECT rate_limit
         if (sql.includes('SELECT rate_limit FROM api_keys WHERE api_key = $1')) {
           return Promise.resolve({ rows: [{ rate_limit: 100 }] });
@@ -590,5 +595,33 @@ describe('AgeGate as a Service - API Tests', () => {
       .set('CSRF-Token', csrfToken)
       .expect(200);
     expect(Array.isArray(res.body.webhooks)).toBe(true);
+  });
+
+  test('GET /api/export/compliance?format=csv returns CSV file', async () => {
+    const csrfToken = await getCsrfToken();
+    const res = await agent
+      .get('/api/export/compliance?format=csv')
+      .set('CSRF-Token', csrfToken)
+      .expect(200);
+    expect(res.headers['content-type']).toMatch(/^text\/csv/);
+    expect(res.text).toContain('client_id,date,total_verifications,successful,success_rate,avg_threshold');
+  });
+
+  test('GET /api/export/compliance?format=pdf returns PDF file', async () => {
+    const csrfToken = await getCsrfToken();
+    const res = await agent
+      .get('/api/export/compliance?format=pdf')
+      .set('CSRF-Token', csrfToken)
+      .expect(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-disposition']).toContain('attachment; filename="agcom_export.pdf"');
+  });
+
+  test('GET /api/export/compliance with invalid format returns 400', async () => {
+    const csrfToken = await getCsrfToken();
+    await agent
+      .get('/api/export/compliance?format=invalid')
+      .set('CSRF-Token', csrfToken)
+      .expect(400);
   });
 });
