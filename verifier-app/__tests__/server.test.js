@@ -23,6 +23,8 @@ jest.mock('ioredis', () => {
         [null, 60]
       ])
     })),
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue('OK'),
     expire: jest.fn(),
     decr: jest.fn(),
     del: jest.fn(),

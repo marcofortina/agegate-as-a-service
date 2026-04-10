@@ -5,6 +5,8 @@ echo "=== Age Gate Integration Test ==="
 
 NODEPORT=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.spec.ports[0].nodePort}')
 BASE_URL="http://agegate.local:${NODEPORT}"
+COOKIE_JAR="$(mktemp)"
+trap 'rm -f "$COOKIE_JAR"' EXIT
 
 echo "1. Health check..."
 curl -s ${BASE_URL}/health | jq .
@@ -13,18 +15,25 @@ echo "2. Onboarding page..."
 curl -s ${BASE_URL}/onboarding | head -n 10
 
 echo "3. Register new client..."
-# Step 1: login and save cookie
-AUTH=$(echo -n 'admin:agegate2026' | base64)
-curl -s -c cookies.txt "${BASE_URL}/dashboard?auth=${AUTH}" > /dev/null
+# Step 1: fetch login page and save session cookie
+LOGIN_PAGE=$(curl -s -c "${COOKIE_JAR}" "${BASE_URL}/login")
+LOGIN_CSRF=$(printf '%s' "${LOGIN_PAGE}" | grep -oP 'name="_csrf" value="\K[^"]+')
 
-# Step 2: get CSRF token
-CSRF_TOKEN=$(curl -s -b cookies.txt ${BASE_URL}/dashboard \
-  | grep -oP 'meta name="csrf-token" content="\K[^"]+')
+echo "Login CSRF token: ${LOGIN_CSRF}"
 
-echo "CSRF token: ${CSRF_TOKEN}"
+# Step 2: perform login
+curl -s -b "${COOKIE_JAR}" -c "${COOKIE_JAR}" -X POST "${BASE_URL}/login" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "_csrf=${LOGIN_CSRF}" \
+  --data-urlencode "user=admin" \
+  --data-urlencode "pass=agegate2026" >/dev/null
 
-# Step 3: register client
-API_KEY=$(curl -s -b cookies.txt -X POST ${BASE_URL}/api/register \
+# Step 3: get CSRF token for admin actions
+CSRF_TOKEN=$(curl -s -b "${COOKIE_JAR}" "${BASE_URL}/csrf-token" | jq -r '.csrfToken')
+echo "Admin CSRF token: ${CSRF_TOKEN}"
+
+# Step 4: register client
+API_KEY=$(curl -s -b "${COOKIE_JAR}" -X POST "${BASE_URL}/api/register" \
   -H "Content-Type: application/json" \
   -H "CSRF-Token: ${CSRF_TOKEN}" \
   -d '{"client_id":"test-client-'$(date +%s)'"}' \
@@ -52,10 +61,10 @@ for i in {1..5}; do
 done
 
 echo "6. Check Prometheus metrics..."
-curl -s -b "${COOKIE_JAR}" ${BASE_URL}/metrics | grep agegate_ | head -10
+curl -s -b "${COOKIE_JAR}" "${BASE_URL}/metrics" | grep agegate_ | head -10
 
 echo "7. Test logout and session..."
-curl -s -b "${COOKIE_JAR}" ${BASE_URL}/dashboard | head -20
-curl -s -b "${COOKIE_JAR}" ${BASE_URL}/logout
+curl -s -b "${COOKIE_JAR}" "${BASE_URL}/dashboard" | head -20
+curl -s -b "${COOKIE_JAR}" "${BASE_URL}/logout" >/dev/null
 
 echo "=== Integration test completed successfully ==="

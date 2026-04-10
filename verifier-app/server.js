@@ -38,23 +38,10 @@ app.use(anonymizeIPMiddleware({
 
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: false }));
-app.use(session({
-  name: 'agegate.sid',
-  secret: SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    secure: isHttps,
-    sameSite: 'strict',
-    maxAge: 3600000
-  }
-}));
 
 // CSRF protection (only for admin routes)
 let csrfProtection = csrf({
   ignoreMethods: ['GET', 'HEAD', 'OPTIONS'],
-  sessionKey: 'session'
 });
 
 app.use(cookieParser());
@@ -165,6 +152,72 @@ const redis = new Redis({
 
 // Share Redis client with proxy for multi-replica salt storage
 setRedisClient(redis);
+
+class RedisSessionStore extends session.Store {
+  constructor(client, prefix = 'sess:') {
+    super();
+    this.client = client;
+    this.prefix = prefix;
+  }
+
+  _key(sid) {
+    return `${this.prefix}${sid}`;
+  }
+
+  _ttl(sessionData) {
+    if (sessionData && sessionData.cookie && sessionData.cookie.expires) {
+      const ttl = Math.ceil((new Date(sessionData.cookie.expires).getTime() - Date.now()) / 1000);
+      return ttl > 0 ? ttl : 1;
+    }
+    if (sessionData && sessionData.cookie && sessionData.cookie.maxAge) {
+      const ttl = Math.ceil(sessionData.cookie.maxAge / 1000);
+      return ttl > 0 ? ttl : 1;
+    }
+    return 3600;
+  }
+
+  get(sid, cb) {
+    this.client.get(this._key(sid))
+      .then(data => cb(null, data ? JSON.parse(data) : null))
+      .catch(err => cb(err));
+  }
+
+  set(sid, sessionData, cb) {
+    const ttl = this._ttl(sessionData);
+    this.client.set(this._key(sid), JSON.stringify(sessionData), 'EX', ttl)
+      .then(() => cb && cb(null))
+      .catch(err => cb && cb(err));
+  }
+
+  destroy(sid, cb) {
+    this.client.del(this._key(sid))
+      .then(() => cb && cb(null))
+      .catch(err => cb && cb(err));
+  }
+
+  touch(sid, sessionData, cb) {
+    this.set(sid, sessionData, cb);
+  }
+}
+
+const sessionOptions = {
+  name: 'agegate.sid',
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure: isHttps,
+    sameSite: 'strict',
+    maxAge: 3600000
+  }
+};
+
+if (process.env.NODE_ENV !== 'test') {
+  sessionOptions.store = new RedisSessionStore(redis);
+}
+
+app.use(session(sessionOptions));
 
 // Rate limit
 async function checkRateLimit(req, apiKey) {
@@ -1241,7 +1294,7 @@ app.get('/logout', (req, res) => {
       return res.status(500).send('Logout failed');
     }
 
-    res.clearCookie('agegate.sid');
+    res.clearCookie('agegate.sid', { path: '/' });
     res.redirect('/login');
   });
 });
