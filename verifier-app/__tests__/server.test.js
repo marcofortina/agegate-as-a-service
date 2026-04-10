@@ -41,6 +41,25 @@ jest.mock('pg', () => {
         // Handle api_keys table queries
         if (sql.includes('FROM api_keys')) {
           const key = params ? params[0] : null;
+
+          if (sql.includes('SELECT description FROM api_keys WHERE api_key = $1')) {
+            return Promise.resolve({ rows: [{ description: 'Test description' }] });
+          }
+
+          if (sql.includes('UPDATE api_keys SET description = $1 WHERE api_key = $2')) {
+            return Promise.resolve({ rows: [] });
+          }
+
+          if (sql.includes('SELECT client_id, is_active, expires_at FROM api_keys WHERE api_key = $1')) {
+            return Promise.resolve({
+              rows: [{ client_id: 'test.local', is_active: true, expires_at: null }]
+            });
+          }
+
+          if (sql.includes('UPDATE api_keys SET is_active = false WHERE api_key = $1')) {
+            return Promise.resolve({ rows: [] });
+          }
+
           // Recognized test keys
           if (key === 'test-key-123' || key === 'rate-limit-key') {
             return Promise.resolve({ rows: [{ client_id: 'test.local', expires_at: null, is_active: true }] });
@@ -421,5 +440,41 @@ describe('AgeGate as a Service - API Tests', () => {
       .send({ description: 'test' })
       .expect(404);
     expect(res.body.error).toContain('API key not found');
+  });
+
+  test('GET /client/description returns description', async () => {
+    const res = await request(app)
+      .get('/client/description')
+      .set('x-api-key', 'test-key-123')
+      .expect(200);
+    expect(res.body.description).toBe('Test description');
+  });
+
+  test('PATCH /client/description updates description', async () => {
+    const res = await request(app)
+      .patch('/client/description')
+      .set('x-api-key', 'test-key-123')
+      .send({ description: 'New client description' })
+      .expect(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.description).toBe('New client description');
+  });
+
+  test('POST /client/rotate returns new API key', async () => {
+    const res = await request(app)
+      .post('/client/rotate')
+      .set('x-api-key', 'test-key-123')
+      .expect(200);
+    expect(res.body.api_key).toMatch(/^agk_[a-f0-9]{48}$/);
+    expect(res.body.client_id).toBe('test.local');
+    // Revocation verification is omitted in unit test (covered by integration tests)
+  });
+
+  test('GET /client/dashboard returns HTML', async () => {
+    const res = await request(app)
+      .get('/client/dashboard')
+      .set('x-api-key', 'test-key-123')
+      .expect(200);
+    expect(res.text).toContain('Age Gate Client Dashboard');
   });
 });

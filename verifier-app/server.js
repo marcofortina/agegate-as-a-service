@@ -466,6 +466,180 @@ app.get('/stats', async (req, res) => {
   });
 });
 
+// Helper function to get stats for a client (reused by client dashboard)
+async function getStatsForClient(apiKey) {
+  const keyCheck = await pool.query(
+    `SELECT client_id FROM api_keys WHERE api_key = $1 AND is_active = true`,
+    [apiKey]
+  );
+  if (keyCheck.rows.length === 0) return null;
+  const clientId = keyCheck.rows[0].client_id;
+
+  const totalResult = await pool.query(
+    `SELECT COUNT(*) as total FROM verifications WHERE client_id = $1 AND api_key = $2`,
+    [clientId, apiKey]
+  );
+  const total = parseInt(totalResult.rows[0].total);
+
+  const successResult = await pool.query(
+    `SELECT COUNT(*) as successful FROM verifications WHERE client_id = $1 AND api_key = $2 AND verified = true`,
+    [clientId, apiKey]
+  );
+  const successful = parseInt(successResult.rows[0].successful);
+  const successRate = total > 0 ? ((successful / total) * 100).toFixed(1) : 0;
+
+  const lastResult = await pool.query(
+    `SELECT MAX(timestamp) as last FROM verifications WHERE client_id = $1 AND api_key = $2`,
+    [clientId, apiKey]
+  );
+  const lastVerification = lastResult.rows[0].last;
+
+  return { total_verifications: total, successful_verifications: successful, success_rate: parseFloat(successRate), last_verification: lastVerification };
+}
+
+// Client self-service dashboard (HTML)
+app.get('/client/dashboard', async (req, res) => {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey) {
+    return res.status(401).send('Missing API Key');
+  }
+  // Verify API key
+  const keyCheck = await pool.query(
+    `SELECT client_id, is_active, expires_at FROM api_keys WHERE api_key = $1`,
+    [apiKey]
+  );
+  if (keyCheck.rows.length === 0 || !keyCheck.rows[0].is_active) {
+    return res.status(401).send('Invalid or revoked API key');
+  }
+  if (keyCheck.rows[0].expires_at && new Date(keyCheck.rows[0].expires_at) < new Date()) {
+    return res.status(401).send('API key expired');
+  }
+  const clientId = keyCheck.rows[0].client_id;
+
+  const statsRes = await getStatsForClient(apiKey);
+
+  let html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AgeGate Client Dashboard</title>
+  <style>
+    body { font-family: system-ui; background: #111; color: #0f0; padding: 20px; }
+    .card { background: #222; padding: 20px; border-radius: 12px; margin: 15px 0; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px; border: 1px solid #0a0; text-align: left; }
+    input, button { padding: 10px; margin: 5px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Age Gate Client Dashboard</h1>
+  <div class="card">
+    <h2>Your Statistics</h2>
+    <p>Client ID: <strong>${clientId}</strong></p>
+    <p>Total verifications: <strong>${statsRes.total_verifications}</strong></p>
+    <p>Successful verifications: <strong>${statsRes.successful_verifications}</strong></p>
+    <p>Success rate: <strong>${statsRes.success_rate}%</strong></p>
+    <p>Last verification: <strong>${statsRes.last_verification ? new Date(statsRes.last_verification).toLocaleString() : 'never'}</strong></p>
+  </div>
+  <div class="card">
+    <h2>Manage Your API Key</h2>
+    <button onclick="rotateKey()">Rotate API Key</button>
+    <button onclick="updateDescription()">Update Description</button>
+  </div>
+  <div class="card">
+    <h2>Current Description</h2>
+    <p id="currentDescription">Loading...</p>
+  </div>
+  <script>
+    async function loadDescription() {
+      const response = await fetch('/client/description', {
+        headers: { 'x-api-key': '${apiKey}' }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        document.getElementById('currentDescription').innerText = data.description || '(none)';
+      }
+    }
+    async function rotateKey() {
+      if (!confirm('Generate a new API key? The old one will be revoked immediately.')) return;
+      const response = await fetch('/client/rotate', {
+        method: 'POST',
+        headers: { 'x-api-key': '${apiKey}' }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        alert('New API Key: ' + data.api_key + '\\nPlease save it. The page will reload.');
+        location.reload();
+      } else {
+        alert('Rotation failed');
+      }
+    }
+    async function updateDescription() {
+      const newDesc = prompt('Enter new description:');
+      if (newDesc === null) return;
+      const response = await fetch('/client/description', {
+        method: 'PATCH',
+        headers: { 'x-api-key': '${apiKey}', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: newDesc })
+      });
+      if (response.ok) {
+        alert('Description updated');
+        loadDescription();
+      } else {
+        alert('Update failed');
+      }
+    }
+    loadDescription();
+  </script>
+</body>
+</html>`;
+  res.send(html);
+});
+
+// Client endpoint to get description
+app.get('/client/description', async (req, res) => {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey) return res.status(401).json({ error: 'Missing API Key' });
+  const result = await pool.query('SELECT description FROM api_keys WHERE api_key = $1', [apiKey]);
+  if (result.rows.length === 0) return res.status(404).json({ error: 'API key not found' });
+  res.json({ description: result.rows[0].description });
+});
+
+// Client endpoint to update description
+app.patch('/client/description', async (req, res) => {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey) return res.status(401).json({ error: 'Missing API Key' });
+  const { description } = req.body;
+  if (typeof description !== 'string') return res.status(400).json({ error: 'description must be a string' });
+  await pool.query('UPDATE api_keys SET description = $1 WHERE api_key = $2', [description.trim().slice(0, 255), apiKey]);
+  res.json({ success: true, description });
+});
+
+// Client endpoint to rotate API key
+app.post('/client/rotate', async (req, res) => {
+  const oldApiKey = req.headers['x-api-key'];
+  if (!oldApiKey) return res.status(401).json({ error: 'Missing API Key' });
+  // Get client_id and verify key is active
+  const keyCheck = await pool.query(
+    `SELECT client_id, is_active, expires_at FROM api_keys WHERE api_key = $1`,
+    [oldApiKey]
+  );
+  if (keyCheck.rows.length === 0 || !keyCheck.rows[0].is_active) {
+    return res.status(401).json({ error: 'Invalid or revoked API key' });
+  }
+  const clientId = keyCheck.rows[0].client_id;
+  // Generate new key
+  const randomBytes = crypto.randomBytes(24).toString('hex');
+  const newApiKey = `agk_${randomBytes}`;
+  const expiresAt = new Date();
+  expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+  await pool.query('BEGIN');
+  await pool.query('UPDATE api_keys SET is_active = false WHERE api_key = $1', [oldApiKey]);
+  await pool.query('INSERT INTO api_keys (client_id, api_key, expires_at, created_by) VALUES ($1, $2, $3, $4)', [clientId, newApiKey, expiresAt, 'self-service']);
+  await pool.query('COMMIT');
+  res.json({ client_id: clientId, api_key: newApiKey, expires_at: expiresAt });
+});
+
 // Dashboard
 app.get('/dashboard', async (req, res) => {
   // Handle login from query param (first time login)
