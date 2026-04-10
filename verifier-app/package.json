@@ -9,8 +9,8 @@
     "lint:check": "eslint . --ext .js",
     "test": "NODE_ENV=test jest --coverage --silent",
     "test:watch": "jest --watch",
-    "test:integration-compose": "jest --config jest.integration.config.js --testPathPattern=compose.test.js --forceExit",
-    "test:integration": "jest --config jest.config.js --testPathPattern=integration"
+    "test:integration": "jest --config jest.integration.config.js --forceExit",
+    "test:integration-compose": "jest --config jest.integration.config.js --testPathPattern=compose.test.js --forceExit"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
