@@ -55,6 +55,7 @@ env:
   VERIFIER_BACKEND: "mock" # or "eidas" in future
   ALLOWED_ORIGINS: "http://agegate.local,https://yourdomain.it"
   # Privacy & Anonymization (double anonymity)
+  # SESSION_SECRET: set via secret
   ANONYMIZE_IP: "true"
   IP_SALT: "" # auto-generated if empty
   NODE_ENV: "production"

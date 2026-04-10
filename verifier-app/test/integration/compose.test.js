@@ -27,6 +27,8 @@ beforeAll(async () => {
   process.env.REDIS_HOST = 'localhost';
   process.env.REDIS_PORT = '6380';
   process.env.ADMIN_PASS = 'admin123';
+  process.env.NODE_ENV = 'test';
+  process.env.SESSION_SECRET = 'test-session-secret';
   process.env.ANONYMIZE_IP = 'false';
   process.env.PORT = '8082';
 
@@ -55,11 +57,19 @@ beforeAll(async () => {
   // Wait for the app to be ready
   await waitOn({ resources: [`http-get://localhost:8082/ready`], timeout: 30000 });
 
-  // Register webhook for the test client (will be done inside a test)
+  const loginPage = await agent.get('/login').expect(200);
+  const loginCsrf = loginPage.text.match(/name="_csrf" value="([^"]+)"/);
+  expect(loginCsrf).not.toBeNull();
+  await agent
+    .post('/login')
+    .set('CSRF-Token', loginCsrf[1])
+    .send({ user: 'admin', pass: 'admin123' })
+    .expect(302);
 }, 60000);
 
 afterAll(() => {
   if (serverProcess) serverProcess.kill('SIGTERM');
+  if (webhookServer) webhookServer.close();
   execSync('docker-compose -f docker-compose.test.yml down -v', { stdio: 'ignore' });
 }, 60000);
 
@@ -79,10 +89,8 @@ describe('Integration Tests with docker-compose', () => {
   });
 
   test('Admin login and get cookie', async () => {
-    await request(baseUrl)
-      .get('/dashboard')
-      .query({ auth: Buffer.from('admin:admin123').toString('base64') })
-      .expect(302);
+    const res = await agent.get('/dashboard').expect(200);
+    expect(res.text).toContain('Webhook Management');
   });
 
   test('Register a new client', async () => {
@@ -91,7 +99,6 @@ describe('Integration Tests with docker-compose', () => {
     const res = await agent
       .post('/api/register')
       .set('CSRF-Token', csrfToken)
-      .auth('admin', 'admin123')
       .send({ client_id: clientId })
       .expect(200);
     expect(res.body.api_key).toMatch(/^agk_[a-f0-9]{48}$/);
@@ -114,7 +121,6 @@ describe('Integration Tests with docker-compose', () => {
     await agent
       .post('/api/webhook')
       .set('CSRF-Token', csrfToken)
-      .auth('admin', 'admin123')
       .send({ client_id: clientId, url: 'http://localhost:8090/webhook' })
       .expect(200);
   });
@@ -149,7 +155,6 @@ describe('Integration Tests with docker-compose', () => {
     const rateRes = await agent
       .post('/api/register')
       .set('CSRF-Token', csrfToken)
-      .auth('admin', 'admin123')
       .send({ client_id: clientId })
       .expect(200);
 
@@ -178,7 +183,6 @@ describe('Integration Tests with docker-compose', () => {
     await agent
       .post('/api/revoke')
       .set('CSRF-Token', csrfToken)
-      .auth('admin', 'admin123')
       .send({ api_key: apiKey })
       .expect(200);
   });
@@ -198,7 +202,6 @@ describe('Integration Tests with docker-compose', () => {
     const reg = await agent
       .post('/api/register')
       .set('CSRF-Token', csrfToken)
-      .auth('admin', 'admin123')
       .send({ client_id: clientId })
       .expect(200);
     const oldKey = reg.body.api_key;
@@ -206,7 +209,6 @@ describe('Integration Tests with docker-compose', () => {
     const rotateRes = await agent
       .post('/api/rotate')
       .set('CSRF-Token', csrfToken)
-      .auth('admin', 'admin123')
       .send({ api_key: oldKey })
       .expect(200);
     expect(rotateRes.body.api_key).toMatch(/^agk_[a-f0-9]{48}$/);
@@ -239,10 +241,7 @@ describe('Integration Tests with docker-compose', () => {
   });
 
   test('Admin dashboard contains Webhook Management section', async () => {
-    const res = await request(baseUrl)
-      .get('/dashboard')
-      .auth('admin', 'admin123')
-      .expect(200);
+    const res = await agent.get('/dashboard').expect(200);
     expect(res.text).toContain('Webhook Management');
   });
 });

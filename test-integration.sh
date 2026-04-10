@@ -52,11 +52,10 @@ for i in {1..5}; do
 done
 
 echo "6. Check Prometheus metrics..."
-curl -s -u admin:agegate2026 ${BASE_URL}/metrics | grep agegate_ | head -10
+curl -s -b "${COOKIE_JAR}" ${BASE_URL}/metrics | grep agegate_ | head -10
 
 echo "7. Test logout and session..."
-curl -s -c cookies.txt -X GET ${BASE_URL}/login
-curl -s -b cookies.txt -X GET "${BASE_URL}/dashboard?auth=$(echo -n 'admin:agegate2026' | base64)" | head -20
-curl -s -b cookies.txt -X GET ${BASE_URL}/logout
+curl -s -b "${COOKIE_JAR}" ${BASE_URL}/dashboard | head -20
+curl -s -b "${COOKIE_JAR}" ${BASE_URL}/logout
 
 echo "=== Integration test completed successfully ==="

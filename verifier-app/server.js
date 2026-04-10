@@ -9,6 +9,7 @@ const { Pool } = require('pg');
 const Redis = require('ioredis');
 const pino = require('pino');
 const prometheus = require('prom-client');
+const session = require('express-session');
 
 const app = express();
 
@@ -22,6 +23,12 @@ const { anonymizeIPMiddleware } = require('./proxy');
 const { setRedisClient } = require('./proxy');
 const cookieParser = require('cookie-parser');
 
+const isHttps = process.env.PUBLIC_URL && process.env.PUBLIC_URL.startsWith('https');
+const SESSION_SECRET = process.env.SESSION_SECRET || (process.env.NODE_ENV === 'test' ? 'test-session-secret' : null);
+if (!SESSION_SECRET) {
+  throw new Error('SESSION_SECRET environment variable is required');
+}
+
 // Apply IP anonymization BEFORE any logging or rate limiting
 const anonymizeIP = process.env.ANONYMIZE_IP !== 'false'; // Enabled by default
 app.use(anonymizeIPMiddleware({
@@ -29,17 +36,29 @@ app.use(anonymizeIPMiddleware({
   passthroughOnError: process.env.NODE_ENV === 'development'
 }));
 
+app.use(cookieParser());
+app.use(express.urlencoded({ extended: false }));
+app.use(session({
+  name: 'agegate.sid',
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure: isHttps,
+    sameSite: 'strict',
+    maxAge: 3600000
+  }
+}));
+
 // CSRF protection (only for admin routes)
 let csrfProtection = csrf({
-  cookie: true,
-  ignoreMethods: ['GET', 'HEAD', 'OPTIONS']
+  ignoreMethods: ['GET', 'HEAD', 'OPTIONS'],
+  sessionKey: 'session'
 });
 
 app.use(cookieParser());
 app.use(express.json({ limit: '10kb' }));
-
-// Configure security based on protocol
-const isHttps = process.env.PUBLIC_URL && process.env.PUBLIC_URL.startsWith('https');
 
 // Helmet configuration
 app.use(helmet({
@@ -84,8 +103,16 @@ const verificationDuration = new prometheus.Histogram({
 register.registerMetric(verificationCounter);
 register.registerMetric(verificationDuration);
 
-app.use(express.json());
 app.use('/sdk', express.static(path.join(__dirname)));
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 // OpenAPI / Swagger
 const swaggerJsdoc = require('swagger-jsdoc');
@@ -271,28 +298,12 @@ async function logAdminAction(adminUser, action, target, details = {}) {
 
 // getAdminUser helper
 function getAdminUser(req) {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Basic ')) return 'unknown';
-  const credentials = Buffer.from(auth.split(' ')[1], 'base64').toString();
-  const [user] = credentials.split(':');
-  return user;
+  return req.session && req.session.adminUser ? req.session.adminUser : 'unknown';
 }
 
 // Admin auth helper
-function isAdmin(req, checkCookie = true) {
-  // Check Authorization header first
-  let authHeader = req.headers.authorization;
-
-  // If no header but cookie exists, use cookie
-  if (!authHeader && checkCookie && req.cookies && req.cookies.admin_auth) {
-    authHeader = `Basic ${req.cookies.admin_auth}`;
-  }
-
-  if (!authHeader || !authHeader.startsWith('Basic ')) return false;
-
-  const credentials = Buffer.from(authHeader.split(' ')[1], 'base64').toString();
-  const [user, pass] = credentials.split(':');
-  return user === ADMIN_USER && pass === ADMIN_PASS;
+function isAdmin(req) {
+  return Boolean(req.session && req.session.adminUser === ADMIN_USER);
 }
 
 // Helper to send webhook notification (fire and forget)
@@ -325,26 +336,45 @@ const verifySchema = z.object({
 });
 
 // Nice HTML login page
-app.get('/login', (req, res) => {
+app.get('/login', csrfProtection, (req, res) => {
+  const csrfToken = req.csrfToken();
+  const error = req.query.error === 'invalid'
+    ? '<p style="color:#f66">Invalid credentials</p>'
+    : '';
+
   res.send(`
     <!DOCTYPE html>
     <html>
     <head><meta charset="utf-8"><title>AgeGate Login</title></head>
     <body style="font-family:system-ui;background:#111;color:#0f0;padding:40px;text-align:center">
       <h1>Age Gate Admin Login</h1>
-      <input id="user" placeholder="Username" value="admin"><br><br>
-      <input id="pass" type="password" placeholder="Password" value="agegate2026"><br><br>
-      <button onclick="login()">Login</button>
-      <script>
-        function login() {
-          const u = document.getElementById('user').value;
-          const p = document.getElementById('pass').value;
-          window.location.href = '/dashboard?auth=' + btoa(u + ':' + p);
-        }
-      </script>
+      ${error}
+      <form method="POST" action="/login">
+        <input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}">
+        <input id="user" name="user" placeholder="Username"><br><br>
+        <input id="pass" name="pass" type="password" placeholder="Password"><br><br>
+        <button type="submit">Login</button>
+      </form>
     </body>
     </html>
   `);
+});
+
+app.post('/login', csrfProtection, (req, res) => {
+  const { user, pass } = req.body;
+  if (user !== ADMIN_USER || pass !== ADMIN_PASS) {
+    return res.redirect('/login?error=invalid');
+  }
+
+  req.session.regenerate(err => {
+    if (err) return res.status(500).send('Login failed');
+
+    req.session.adminUser = user;
+    req.session.save(saveErr => {
+      if (saveErr) return res.status(500).send('Login failed');
+      res.redirect('/dashboard');
+    });
+  });
 });
 
 // Verifier
@@ -685,39 +715,8 @@ app.post('/client/rotate', async (req, res) => {
 
 // Dashboard
 app.get('/dashboard', csrfProtection, async (req, res) => {
-  // Handle login from query param (first time login)
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader && req.query.auth) {
-    const isValid = await isAdminWithAuth(`Basic ${req.query.auth}`);
-
-    if (isValid) {
-      // Set session cookie
-      res.cookie('admin_auth', req.query.auth, {
-        httpOnly: true,
-        secure: isHttps,
-        sameSite: 'strict',
-        maxAge: 3600000 // 1 hour
-      });
-      // Redirect to clean dashboard (remove auth from URL)
-      return res.redirect('/dashboard');
-    }
-    return res.redirect('/login?error=invalid');
-  }
-
-  // Check authentication via cookie or header
-  if (!isAdmin(req, true)) {
+  if (!isAdmin(req)) {
     return res.redirect('/login');
-  }
-
-  // If user came via header but no cookie yet, set one
-  if (!req.cookies.admin_auth && req.headers.authorization) {
-    const authValue = req.headers.authorization.replace('Basic ', '');
-    res.cookie('admin_auth', authValue, {
-      httpOnly: true,
-      secure: isHttps,
-      sameSite: 'strict'
-    });
   }
 
   // Fetch API keys with status
@@ -769,8 +768,8 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
   </style>
 </head>
 <body>
-  <meta name="csrf-token" content="${csrfToken}">
-  <script> window.csrfToken = '${csrfToken}'; </script>
+  <meta name="csrf-token" content="${escapeHtml(csrfToken)}">
+  <script> window.csrfToken = ${JSON.stringify(csrfToken)}; </script>
   <script>
     // Define functions before any button uses them
     async function registerClient() {
@@ -928,10 +927,10 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
       <tr><th>Admin</th><th>Action</th><th>Target</th><th>Details</th><th>Timestamp</th></tr>`;
   auditLog.rows.forEach(log => {
     html += `<tr>
-      <td>${log.admin_user}</td>
-      <td>${log.action}</td>
-      <td>${log.target || '-'}</td>
-      <td>${JSON.stringify(log.details)}</td>
+      <td>${escapeHtml(log.admin_user)}</td>
+      <td>${escapeHtml(log.action)}</td>
+      <td>${escapeHtml(log.target || '-')}</td>
+      <td>${escapeHtml(JSON.stringify(log.details))}</td>
       <td>${new Date(log.timestamp).toLocaleString()}</td>
     </tr>`;
   });
@@ -1015,13 +1014,9 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
   res.send(html);
 });
 
-// Helper function to check auth without modifying request
-async function isAdminWithAuth(authHeader) {
-  if (!authHeader || !authHeader.startsWith('Basic ')) return false;
-  const credentials = Buffer.from(authHeader.split(' ')[1], 'base64').toString();
-  const [user, pass] = credentials.split(':');
-  return user === ADMIN_USER && pass === ADMIN_PASS;
-}
+app.get('/csrf-token', csrfProtection, (req, res) => {
+  res.json({ csrfToken: req.csrfToken() });
+});
 
 // Admin endpoints
 app.post('/api/register', csrfProtection, (req, res) => {
@@ -1241,8 +1236,14 @@ app.get('/api/keys/:client_id', async (req, res) => {
 
 // Logout endpoint
 app.get('/logout', (req, res) => {
-  res.clearCookie('admin_auth');
-  res.redirect('/login');
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).send('Logout failed');
+    }
+
+    res.clearCookie('agegate.sid');
+    res.redirect('/login');
+  });
 });
 
 // CSRF token endpoint for browser and tests
