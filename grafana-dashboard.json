@@ -1,0 +1,50 @@
+{
+  "dashboard": {
+    "title": "Age Gate as a Service - Overview",
+    "uid": "agegate-overview",
+    "tags": ["agegate", "verification"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "title": "Verifications per minute",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(agegate_verifications_total[1m])",
+            "legendFormat": "{{client_id}}"
+          }
+        ]
+      },
+      {
+        "title": "Rate limited requests (429) per minute",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(agegate_rate_limited_total[1m])",
+            "legendFormat": "{{client_id}} - {{type}}"
+          }
+        ]
+      },
+      {
+        "title": "Success rate per client",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(agegate_verifications_total{verified=\"true\"}) by (client_id) / sum(agegate_verifications_total) by (client_id) * 100",
+            "legendFormat": "{{client_id}}"
+          }
+        ]
+      },
+      {
+        "title": "HTTP errors (5xx)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sum(rate(http_server_duration_milliseconds_count{http_status_code=~\"5..\"}[5m])) by (service)",
+            "legendFormat": "{{service}}"
+          }
+        ]
+      }
+    ]
+  }
+}

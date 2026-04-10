@@ -88,8 +88,15 @@ const verificationDuration = new prometheus.Histogram({
   labelNames: ['client_id']
 });
 
+const rateLimitedCounter = new prometheus.Counter({
+  name: 'agegate_rate_limited_total',
+  help: 'Total number of rate limited requests (429)',
+  labelNames: ['client_id', 'type']
+});
+
 register.registerMetric(verificationCounter);
 register.registerMetric(verificationDuration);
+register.registerMetric(rateLimitedCounter);
 
 app.use('/sdk', express.static(path.join(__dirname)));
 
@@ -484,10 +491,12 @@ app.post('/verify', async (req, res) => {
   if (!rateCheck.allowed) {
     if (rateCheck.type === 'daily') {
       logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Daily limit exceeded');
+      rateLimitedCounter.inc({ client_id: clientId, type: 'daily' });
       return res.status(429).json({ status: 'error', message: `Daily limit exceeded (${rateCheck.limit} verifications/day)` });
     } else {
       // rate limit
       logger.warn({ apiKey: apiKey.substring(0,8)+'...', anonymizedIP: req.anonymizedIP }, 'Rate limit exceeded');
+      rateLimitedCounter.inc({ client_id: clientId, type: 'rate' });
       return res.status(429).json({ status: 'error', message: `Rate limit exceeded (${rateCheck.limit} requests/min)` });
     }
   }

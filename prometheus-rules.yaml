@@ -1,0 +1,20 @@
+groups:
+  - name: agegate_alerts
+    rules:
+      - alert: HighRateLimitHits
+        expr: rate(agegate_rate_limited_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate limit hits for {{ $labels.client_id }}"
+          description: "Client {{ $labels.client_id }} is being rate limited at {{ $value }} requests per minute."
+
+      - alert: HighErrorRate
+        expr: sum(rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[5m])) / sum(rate(http_server_duration_milliseconds_count[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate (5xx) for Age Gate service"
+          description: "Error rate is {{ $value | humanizePercentage }}."
