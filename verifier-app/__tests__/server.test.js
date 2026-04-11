@@ -390,6 +390,8 @@ describe('AgeGate as a Service - API Tests', () => {
 
     expect(res.body.client_id).toBe('test.local');
     expect(res.body.total_verifications).toBe(42);
+    expect(Array.isArray(res.body.threshold_breakdown)).toBe(true);
+    expect(Array.isArray(res.body.weekly_breakdown)).toBe(true);
   });
 
   test('GET /api/v1/keys/:client_id returns keys for admin', async () => {

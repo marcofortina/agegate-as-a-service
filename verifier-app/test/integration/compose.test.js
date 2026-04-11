@@ -312,6 +312,9 @@ describe('Integration Tests with docker-compose', () => {
       .set('x-api-key', apiKey)
       .expect(200);
     expect(res.body.total_verifications).toBeDefined();
+    expect(Array.isArray(res.body.threshold_breakdown)).toBe(true);
+    expect(Array.isArray(res.body.weekly_breakdown)).toBe(true);
+    expect(Array.isArray(res.body.daily_breakdown)).toBe(true);
   });
 
   test('Logout invalidates the authenticated session', async () => {

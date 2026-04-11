@@ -11,6 +11,11 @@ Example using `curl`:
 curl -H "x-api-key: agk_..." http://agegate.local/api/v1/client/dashboard
 ```
 
+The dashboard now includes interactive charts powered by Chart.js:
+- Daily verifications (last 30 days)
+- Verifications by age threshold (18/21/25)
+- Weekly verifications (last 12 weeks)
+
 The response is an HTML page that shows:
 - Total and successful verifications
 - Success rate

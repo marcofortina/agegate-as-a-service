@@ -747,13 +747,44 @@ app.get('/api/v1/stats', async (req, res) => {
     verifications: parseInt(row.count)
   }));
 
+  // Threshold breakdown
+  const thresholdResult = await pool.query(
+    `SELECT threshold, COUNT(*) as count
+     FROM verifications
+     WHERE client_id = $1 AND api_key = $2
+     GROUP BY threshold
+     ORDER BY threshold`,
+    [clientId, apiKey]
+  );
+  const thresholdBreakdown = thresholdResult.rows.map(row => ({
+    threshold: row.threshold,
+    count: parseInt(row.count)
+  }));
+
+  // Weekly breakdown (last 12 weeks)
+  const weeklyResult = await pool.query(
+    `SELECT DATE_TRUNC('week', timestamp) as week, COUNT(*) as count
+     FROM verifications
+     WHERE client_id = $1 AND api_key = $2
+       AND timestamp > NOW() - INTERVAL '12 weeks'
+     GROUP BY week
+     ORDER BY week DESC`,
+    [clientId, apiKey]
+  );
+  const weeklyBreakdown = weeklyResult.rows.map(row => ({
+    week: row.week.toISOString().slice(0,10),
+    verifications: parseInt(row.count)
+  }));
+
   res.json({
     client_id: clientId,
     total_verifications: total,
     successful_verifications: successful,
     success_rate: parseFloat(successRate),
     last_verification: lastVerification,
-    daily_breakdown: daily
+    daily_breakdown: daily,
+    threshold_breakdown: thresholdBreakdown,
+    weekly_breakdown: weeklyBreakdown
   });
 });
 
@@ -814,9 +845,12 @@ app.get('/api/v1/client/dashboard', async (req, res) => {
 <head>
   <meta charset="utf-8">
   <title>AgeGate Client Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     body { font-family: system-ui; background: #111; color: #0f0; padding: 20px; }
     .card { background: #222; padding: 20px; border-radius: 12px; margin: 15px 0; }
+    .chart-container { width: 100%; max-width: 600px; margin: 20px auto; }
+    canvas { max-height: 300px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { padding: 12px; border: 1px solid #0a0; text-align: left; }
     input, button { padding: 10px; margin: 5px; font-size: 16px; }
@@ -832,6 +866,9 @@ app.get('/api/v1/client/dashboard', async (req, res) => {
     <p>Success rate: <strong>${statsRes.success_rate}%</strong></p>
     <p>Last verification: <strong>${statsRes.last_verification ? new Date(statsRes.last_verification).toLocaleString() : 'never'}</strong></p>
   </div>
+  <div class="card"><h2>Daily Verifications (last 30 days)</h2><div class="chart-container"><canvas id="dailyChart"></canvas></div></div>
+  <div class="card"><h2>Verifications by Threshold</h2><div class="chart-container"><canvas id="thresholdChart"></canvas></div></div>
+  <div class="card"><h2>Weekly Verifications (last 12 weeks)</h2><div class="chart-container"><canvas id="weeklyChart"></canvas></div></div>
   <div class="card">
     <h2>Manage Your API Key</h2>
     <button onclick="rotateKey()">Rotate API Key</button>
@@ -850,6 +887,46 @@ app.get('/api/v1/client/dashboard', async (req, res) => {
         const data = await response.json();
         document.getElementById('currentDescription').innerText = data.description || '(none)';
       }
+    }
+    async function loadCharts() {
+      const response = await fetch('/api/v1/stats', {
+        headers: { 'x-api-key': '${apiKey}' }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        // Daily chart (line)
+        const dailyLabels = data.daily_breakdown.map(d => d.date).reverse();
+        const dailyCounts = data.daily_breakdown.map(d => d.verifications).reverse();
+        new Chart(document.getElementById('dailyChart'), {
+          type: 'line',
+          data: { labels: dailyLabels, datasets: [{ label: 'Verifications', data: dailyCounts, borderColor: '#0f0', fill: false }] },
+          options: { responsive: true, maintainAspectRatio: true }
+        });
+        // Threshold pie chart
+        const thresholdLabels = data.threshold_breakdown.map(t => t.threshold);
+        const thresholdCounts = data.threshold_breakdown.map(t => t.count);
+        new Chart(document.getElementById('thresholdChart'), {
+          type: 'pie',
+          data: { labels: thresholdLabels, datasets: [{ data: thresholdCounts, backgroundColor: ['#0f0', '#0a0', '#050'] }] }
+        });
+        // Weekly bar chart
+        const weeklyLabels = data.weekly_breakdown.map(w => w.week).reverse();
+        const weeklyCounts = data.weekly_breakdown.map(w => w.verifications).reverse();
+        new Chart(document.getElementById('weeklyChart'), {
+          type: 'bar',
+          data: { labels: weeklyLabels, datasets: [{ label: 'Verifications', data: weeklyCounts, backgroundColor: '#0f0' }] }
+        });
+      } else {
+        console.error('Failed to load stats for charts');
+      }
+    }
+    // Ensure Chart is defined before loading
+    if (typeof Chart !== 'undefined') {
+      loadCharts();
+    } else {
+      window.addEventListener('load', () => {
+        loadCharts();
+      });
     }
     async function rotateKey() {
       if (!confirm('Generate a new API key? The old one will be revoked immediately.')) return;
