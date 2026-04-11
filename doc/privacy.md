@@ -4,7 +4,7 @@
 
 ## GDPR Compliance
 
-This service processes personal data (anonymised IP addresses) on behalf of the data controller (the customer). The legal basis is legitimate interest (Art. 6(1)(f) GDPR). A Data Protection Impact Assessment (DPIA) will be conducted before production deployment.
+This service processes personal data (anonymised IP addresses) on behalf of the data controller (the customer). The legal basis is legitimate interest (Art. 6(1)(f) GDPR). A Data Protection Impact Assessment (DPIA) has been conducted (see [DPIA](./dpia.md)).
 
 ## Data Retention
 

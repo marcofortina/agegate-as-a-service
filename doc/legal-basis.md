@@ -47,7 +47,7 @@ End users have the right to:
 
 ## Data Protection Impact Assessment (DPIA)
 
-A DPIA will be conducted before production deployment. The processing does **not** result in high risk to individuals because:
+A DPIA has been conducted (see [Data Protection Impact Assessment](./dpia.md)). The processing does **not** result in high risk to individuals because:
 - Data is anonymised (no link to natural persons).
 - Retention is limited.
 - No profiling or automated decision‑making occurs.
