@@ -4,7 +4,7 @@ Administrators can generate a report of verification data that complies with AGC
 
 ## Endpoint
 
-`GET /api/export/compliance` (admin only, CSRF protected)
+`GET /api/v1/export/compliance` (admin only, CSRF protected)
 
 ### Query Parameters
 

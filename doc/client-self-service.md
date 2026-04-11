@@ -4,11 +4,11 @@ Clients can access a dedicated dashboard to view their verification statistics a
 
 ## Access
 
-The dashboard is available at `GET /client/dashboard`. Authentication is performed via the `x-api-key` header.
+The dashboard is available at `GET /api/v1/client/dashboard`. Authentication is performed via the `x-api-key` header.
 
 Example using `curl`:
 ```bash
-curl -H "x-api-key: agk_..." http://agegate.local/client/dashboard
+curl -H "x-api-key: agk_..." http://agegate.local/api/v1/client/dashboard
 ```
 
 The response is an HTML page that shows:
@@ -20,7 +20,7 @@ The response is an HTML page that shows:
 
 ## API Endpoints for Clients
 
-### `GET /client/description`
+### `GET /api/v1/client/description`
 Returns the current description of the API key.
 
 **Request header:** `x-api-key: <your-key>`
@@ -30,7 +30,7 @@ Returns the current description of the API key.
 { "description": "My website" }
 ```
 
-### `PATCH /client/description`
+### `PATCH /api/v1/client/description`
 Updates the description of the API key.
 
 **Request body:**
@@ -43,7 +43,7 @@ Updates the description of the API key.
 { "success": true, "description": "New description" }
 ```
 
-### `POST /client/rotate`
+### `POST /api/v1/client/rotate`
 Generates a new API key and revokes the current one. The new key is returned in the response. The old key becomes invalid immediately.
 
 **Response:**

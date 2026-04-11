@@ -6,12 +6,12 @@ Age Gate as a Service can send asynchronous HTTP POST notifications to a configu
 
 ## Configuration (Admin only)
 
-Use the `POST /api/webhook` endpoint to register or update a webhook URL for a specific client.
+Use the `POST /api/v1/webhook` endpoint to register or update a webhook URL for a specific client.
 
 ### Request
 
 ```bash
-curl -X POST https://agegate.example.com/api/webhook \
+curl -X POST https://agegate.example.com/api/v1/webhook \
   -u admin:password \
   -H "Content-Type: application/json" \
   -d '{"client_id": "example.com", "url": "https://your-server.com/callback"}'
@@ -27,7 +27,7 @@ curl -X POST https://agegate.example.com/api/webhook \
 }
 ```
 
-To remove a webhook, use `DELETE /api/webhook/:client_id`.
+To remove a webhook, use `DELETE /api/v1/webhook/:client_id`.
 
 ## Webhook Payload
 
@@ -37,7 +37,7 @@ In the admin dashboard, there is a **Webhook Management** card that lists all re
 - Add a new webhook by clicking **Add Webhook** and entering client ID and URL.
 - Delete an existing webhook using the **Delete** button next to each entry.
 
-The dashboard uses the same API endpoints (`GET /api/webhooks`, `POST /api/webhook`, `DELETE /api/webhook/:client_id`) under the hood.
+The dashboard uses the same API endpoints (`GET /api/v1/webhooks`, `POST /api/v1/webhook`, `DELETE /api/v1/webhook/:client_id`) under the hood.
 
 ## Payload Format
 

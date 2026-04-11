@@ -33,7 +33,7 @@ CSRF_TOKEN=$(curl -s -b "${COOKIE_JAR}" "${BASE_URL}/csrf-token" | jq -r '.csrfT
 echo "Admin CSRF token: ${CSRF_TOKEN}"
 
 # Step 4: register client
-API_KEY=$(curl -s -b "${COOKIE_JAR}" -X POST "${BASE_URL}/api/register" \
+API_KEY=$(curl -s -b "${COOKIE_JAR}" -X POST "${BASE_URL}/api/v1/register" \
   -H "Content-Type: application/json" \
   -H "CSRF-Token: ${CSRF_TOKEN}" \
   -d '{"client_id":"test-client-'$(date +%s)'"}' \
@@ -47,14 +47,14 @@ if [ -z "$API_KEY" ] || [ "$API_KEY" = "null" ]; then
 fi
 
 echo "4. Test age verification (should pass)..."
-curl -s -X POST ${BASE_URL}/verify \
+curl -s -X POST ${BASE_URL}/api/v1/verify \
   -H "x-api-key: ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"client_id":"test-client","threshold":18}' | jq .
 
 echo "5. Test rate limiting (rapid requests)..."
 for i in {1..5}; do
-  curl -s -X POST ${BASE_URL}/verify \
+  curl -s -X POST ${BASE_URL}/api/v1/verify \
     -H "x-api-key: ${API_KEY}" \
     -H "Content-Type: application/json" \
     -d '{"client_id":"test-client","threshold":18}' | jq '.status'

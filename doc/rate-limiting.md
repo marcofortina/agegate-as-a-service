@@ -14,7 +14,7 @@ Both limits are enforced in real time using Redis.
 
 ## Admin Endpoint
 
-### `PATCH /api/keys/:api_key/rate-limit`
+### `PATCH /api/v1/keys/:api_key/rate-limit`
 
 Update the rate limit for a specific API key.
 
@@ -38,7 +38,7 @@ Update the rate limit for a specific API key.
 
 **Constraints:** `rate_limit` must be an integer between 1 and 10000.
 
-### `PATCH /api/keys/:api_key/daily-limit`
+### `PATCH /api/v1/keys/:api_key/daily-limit`
 
 Update the daily verification limit for a specific API key.
 

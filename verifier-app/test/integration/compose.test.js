@@ -97,7 +97,7 @@ describe('Integration Tests with docker-compose', () => {
     const csrfToken = await getCsrfToken();
 
     const res = await agent
-      .post('/api/register')
+      .post('/api/v1/register')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: clientId })
       .expect(200);
@@ -108,7 +108,7 @@ describe('Integration Tests with docker-compose', () => {
 
   test('Age verification with valid API key', async () => {
     const res = await request(baseUrl)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', apiKey)
       .send({ client_id: clientId, threshold: 18 })
       .expect(200);
@@ -119,7 +119,7 @@ describe('Integration Tests with docker-compose', () => {
     const csrfToken = await getCsrfToken();
     console.log('Registering webhook for client', clientId);
     await agent
-      .post('/api/webhook')
+      .post('/api/v1/webhook')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: clientId, url: 'http://localhost:8090/webhook' })
       .expect(200);
@@ -130,7 +130,7 @@ describe('Integration Tests with docker-compose', () => {
     webhookReceived = false; // reset flag
     console.log('Triggering verification for client', clientId);
     const res = await request(baseUrl)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', apiKey)
       .send({ client_id: clientId, threshold: 18 })
       .expect(200);
@@ -142,7 +142,7 @@ describe('Integration Tests with docker-compose', () => {
 
   test('Age verification with invalid API key', async () => {
     const res = await request(baseUrl)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', 'invalid-key')
       .send({ client_id: clientId, threshold: 18 })
       .expect(401);
@@ -153,7 +153,7 @@ describe('Integration Tests with docker-compose', () => {
     const csrfToken = await getCsrfToken();
 
     const rateRes = await agent
-      .post('/api/register')
+      .post('/api/v1/register')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: clientId })
       .expect(200);
@@ -164,7 +164,7 @@ describe('Integration Tests with docker-compose', () => {
     for (let i = 0; i < 101; i++) {
       requests.push(
         request(baseUrl)
-          .post('/verify')
+          .post('/api/v1/verify')
           .set('x-api-key', rateApiKey)
           .send({ client_id: clientId, threshold: 18 })
       );
@@ -180,7 +180,7 @@ describe('Integration Tests with docker-compose', () => {
   test('Daily limit enforcement', async () => {
     const csrfToken = await getCsrfToken();
     const reg = await agent
-      .post('/api/register')
+      .post('/api/v1/register')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: 'daily-limit-test' })
       .expect(200);
@@ -188,14 +188,14 @@ describe('Integration Tests with docker-compose', () => {
 
     // Set daily limit to 2
     await agent
-      .patch(`/api/keys/${apiKey}/daily-limit`)
+      .patch(`/api/v1/keys/${apiKey}/daily-limit`)
       .set('CSRF-Token', csrfToken)
       .send({ daily_limit: 2 })
       .expect(200);
 
     // First request: should succeed
     let res = await request(baseUrl)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', apiKey)
       .send({ client_id: 'daily-limit-test', threshold: 18 })
       .expect(200);
@@ -203,7 +203,7 @@ describe('Integration Tests with docker-compose', () => {
 
     // Second request: should succeed
     res = await request(baseUrl)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', apiKey)
       .send({ client_id: 'daily-limit-test', threshold: 18 })
       .expect(200);
@@ -211,7 +211,7 @@ describe('Integration Tests with docker-compose', () => {
 
     // Third request: should be rate limited (daily)
     res = await request(baseUrl)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', apiKey)
       .send({ client_id: 'daily-limit-test', threshold: 18 })
       .expect(429);
@@ -222,7 +222,7 @@ describe('Integration Tests with docker-compose', () => {
     const csrfToken = await getCsrfToken();
 
     await agent
-      .post('/api/revoke')
+      .post('/api/v1/revoke')
       .set('CSRF-Token', csrfToken)
       .send({ api_key: apiKey })
       .expect(200);
@@ -230,7 +230,7 @@ describe('Integration Tests with docker-compose', () => {
 
   test('Verification with revoked key fails', async () => {
     const res = await request(baseUrl)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', apiKey)
       .send({ client_id: clientId, threshold: 18 })
       .expect(401);
@@ -241,14 +241,14 @@ describe('Integration Tests with docker-compose', () => {
     const csrfToken = await getCsrfToken();
 
     const reg = await agent
-      .post('/api/register')
+      .post('/api/v1/register')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: clientId })
       .expect(200);
     const oldKey = reg.body.api_key;
 
     const rotateRes = await agent
-      .post('/api/rotate')
+      .post('/api/v1/rotate')
       .set('CSRF-Token', csrfToken)
       .send({ api_key: oldKey })
       .expect(200);
@@ -259,14 +259,14 @@ describe('Integration Tests with docker-compose', () => {
     apiKey = rotateRes.body.api_key;
 
     const verifyOld = await request(baseUrl)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', oldKey)
       .send({ client_id: clientId, threshold: 18 })
       .expect(401);
     expect(verifyOld.body.message).toContain('Invalid API key');
 
     const verifyNew = await request(baseUrl)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', apiKey)
       .send({ client_id: clientId, threshold: 18 })
       .expect(200);
@@ -275,7 +275,7 @@ describe('Integration Tests with docker-compose', () => {
 
   test('Stats endpoint works', async () => {
     const res = await request(baseUrl)
-      .get('/stats')
+      .get('/api/v1/stats')
       .set('x-api-key', apiKey)
       .expect(200);
     expect(res.body.total_verifications).toBeDefined();
@@ -289,7 +289,7 @@ describe('Integration Tests with docker-compose', () => {
   test('Export CSV compliance report', async () => {
     const csrfToken = await getCsrfToken();
     const res = await agent
-      .get('/api/export/compliance?format=csv')
+      .get('/api/v1/export/compliance?format=csv')
       .set('CSRF-Token', csrfToken)
       .expect(200);
     expect(res.headers['content-type']).toMatch(/^text\/csv/);
@@ -299,7 +299,7 @@ describe('Integration Tests with docker-compose', () => {
   test('Export PDF compliance report', async () => {
     const csrfToken = await getCsrfToken();
     const res = await agent
-      .get('/api/export/compliance?format=pdf')
+      .get('/api/v1/export/compliance?format=pdf')
       .set('CSRF-Token', csrfToken)
       .expect(200);
     expect(res.headers['content-type']).toBe('application/pdf');

@@ -44,14 +44,14 @@ The SDK automatically collects the user's IP address (anonymized by the server) 
 
 ## Step 3: Backend Integration (Node.js Example)
 
-If you prefer to verify on the server side, send a `POST` request to the `/verify` endpoint.
+If you prefer to verify on the server side, send a `POST` request to the `/api/v1/verify` endpoint.
 
 ```javascript
 const axios = require('axios');
 
 async function verifyAge(userIp, threshold = 18) {
   try {
-    const response = await axios.post('https://agegate.yourdomain.com/verify', {
+    const response = await axios.post('https://agegate.yourdomain.com/api/v1/verify', {
       client_id: 'casino-italia.it',
       threshold: threshold,
       // Note: client_ip is not sent; the server reads it from the request
@@ -76,7 +76,7 @@ $apiKey = 'agk_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p';
 $clientId = 'casino-italia.it';
 $threshold = 18;
 
-$ch = curl_init('https://agegate.yourdomain.com/verify');
+$ch = curl_init('https://agegate.yourdomain.com/api/v1/verify');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -104,7 +104,7 @@ if ($httpCode === 200) {
 ## Step 5: Testing with cURL
 
 ```bash
-curl -X POST https://agegate.yourdomain.com/verify \
+curl -X POST https://agegate.yourdomain.com/api/v1/verify \
   -H "x-api-key: agk_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p" \
   -H "Content-Type: application/json" \
   -d '{"client_id": "casino-italia.it", "threshold": 18}'

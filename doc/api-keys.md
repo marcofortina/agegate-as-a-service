@@ -5,7 +5,7 @@
 - **Cryptographically secure generation** – `crypto.randomBytes(24)` instead of `Math.random()`
 - **Expiration** – Keys expire after 1 year (configurable in code)
 - **Soft revocation** – Keys are marked `is_active = false` instead of being deleted
-- **Rotation endpoint** – `/api/rotate` generates a new key and revokes the old one
+- **Rotation endpoint** – `/api/v1/rotate` generates a new key and revokes the old one
 - **Audit trail** – `created_by` and `last_used_at` columns track usage
 
 ## Database schema
@@ -27,7 +27,7 @@ CREATE TABLE api_keys (
 
 ### Register a new client
 ```bash
-curl -X POST http://agegate.local/api/register \
+curl -X POST http://agegate.local/api/v1/register \
   -u admin:yourpassword \
   -H "Content-Type: application/json" \
   -d '{"client_id": "example.com"}'
@@ -36,7 +36,7 @@ Response: `{ "client_id": "example.com", "api_key": "agk_...", "expires_at": "20
 
 ### Revoke an API key
 ```bash
-curl -X POST http://agegate.local/api/revoke \
+curl -X POST http://agegate.local/api/v1/revoke \
   -u admin:yourpassword \
   -H "Content-Type: application/json" \
   -d '{"api_key": "agk_..."}'
@@ -44,7 +44,7 @@ curl -X POST http://agegate.local/api/revoke \
 
 ### Rotate an API key
 ```bash
-curl -X POST http://agegate.local/api/rotate \
+curl -X POST http://agegate.local/api/v1/rotate \
   -u admin:yourpassword \
   -H "Content-Type: application/json" \
   -d '{"api_key": "agk_..."}'
@@ -53,7 +53,7 @@ Response: `{ "client_id": "...", "api_key": "agk_new...", "expires_at": "..." }`
 
 ## Validation during verification
 
-Every `/verify` request:
+Every `/api/v1/verify` request:
 1. Checks that the API key exists in `api_keys`
 2. Verifies `is_active = true`
 3. Verifies `expires_at` is not in the past

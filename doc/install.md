@@ -63,7 +63,7 @@ Then verify:
 If Ingress is configured:
 
 ```
-http://agegate.local/api-docs
+http://agegate.local/api/v1/api-docs
 ```
 
 Otherwise use port-forward (see above).

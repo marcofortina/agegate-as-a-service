@@ -461,7 +461,7 @@ app.post('/login', csrfProtection, (req, res) => {
 });
 
 // Verifier
-app.post('/verify', async (req, res) => {
+app.post('/api/v1/verify', async (req, res) => {
   const start = Date.now();
   const apiKey = req.headers['x-api-key'];
   const clientId = req.body.client_id || 'unknown';
@@ -555,8 +555,8 @@ app.post('/verify', async (req, res) => {
   }
 });
 
-// GET /stats - Client statistics (authenticated via API key)
-app.get('/stats', async (req, res) => {
+// GET /api/v1/stats - Client statistics (authenticated via API key)
+app.get('/api/v1/stats', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   if (!apiKey) {
     logger.warn({ clientId: 'unknown' }, 'Missing API Key for stats');
@@ -663,7 +663,7 @@ async function getStatsForClient(apiKey) {
 }
 
 // Client self-service dashboard (HTML)
-app.get('/client/dashboard', async (req, res) => {
+app.get('/api/v1/client/dashboard', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   if (!apiKey) {
     return res.status(401).send('Missing API Key');
@@ -717,7 +717,7 @@ app.get('/client/dashboard', async (req, res) => {
   </div>
   <script>
     async function loadDescription() {
-      const response = await fetch('/client/description', {
+      const response = await fetch('/api/v1/client/description', {
         headers: { 'x-api-key': '${apiKey}' }
       });
       if (response.ok) {
@@ -727,7 +727,7 @@ app.get('/client/dashboard', async (req, res) => {
     }
     async function rotateKey() {
       if (!confirm('Generate a new API key? The old one will be revoked immediately.')) return;
-      const response = await fetch('/client/rotate', {
+      const response = await fetch('/api/v1/client/rotate', {
         method: 'POST',
         headers: { 'x-api-key': '${apiKey}' }
       });
@@ -742,7 +742,7 @@ app.get('/client/dashboard', async (req, res) => {
     async function updateDescription() {
       const newDesc = prompt('Enter new description:');
       if (newDesc === null) return;
-      const response = await fetch('/client/description', {
+      const response = await fetch('/api/v1/client/description', {
         method: 'PATCH',
         headers: { 'x-api-key': '${apiKey}', 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: newDesc })
@@ -762,7 +762,7 @@ app.get('/client/dashboard', async (req, res) => {
 });
 
 // Client endpoint to get description
-app.get('/client/description', async (req, res) => {
+app.get('/api/v1/client/description', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   if (!apiKey) return res.status(401).json({ error: 'Missing API Key' });
   const result = await pool.query('SELECT description FROM api_keys WHERE api_key = $1', [apiKey]);
@@ -771,7 +771,7 @@ app.get('/client/description', async (req, res) => {
 });
 
 // Client endpoint to update description
-app.patch('/client/description', async (req, res) => {
+app.patch('/api/v1/client/description', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   if (!apiKey) return res.status(401).json({ error: 'Missing API Key' });
   const { description } = req.body;
@@ -781,7 +781,7 @@ app.patch('/client/description', async (req, res) => {
 });
 
 // Client endpoint to rotate API key
-app.post('/client/rotate', async (req, res) => {
+app.post('/api/v1/client/rotate', async (req, res) => {
   const oldApiKey = req.headers['x-api-key'];
   if (!oldApiKey) return res.status(401).json({ error: 'Missing API Key' });
   // Get client_id and verify key is active
@@ -868,7 +868,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
       const clientId = document.getElementById('newClientId').value.trim();
       const description = document.getElementById('newClientDesc').value.trim();
       if (!clientId) return alert('Client ID is required');
-      const response = await fetch('/api/register', {
+      const response = await fetch('/api/v1/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ client_id: clientId, description: description || undefined })
@@ -880,7 +880,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
 
     async function revokeKey(apiKey) {
       if (!confirm('Revoke this API Key permanently?')) return;
-      const response = await fetch('/api/revoke', {
+      const response = await fetch('/api/v1/revoke', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ api_key: apiKey })
@@ -895,7 +895,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
 
     async function rotateKey(apiKey) {
       if (!confirm('Generate a new API Key and revoke the old one?')) return;
-      const response = await fetch('/api/rotate', {
+      const response = await fetch('/api/v1/rotate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ api_key: apiKey })
@@ -911,7 +911,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
 
     async function viewStats(apiKey) {
       try {
-        const response = await fetch('/stats', {
+        const response = await fetch('/api/v1/stats', {
           method: 'GET',
           headers: { 'x-api-key': apiKey, 'CSRF-Token': window.csrfToken }
         });
@@ -931,7 +931,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
         alert('Rate limit must be an integer between 1 and 10000');
         return;
       }
-      const response = await fetch('/api/keys/' + apiKey + '/rate-limit', {
+      const response = await fetch('/api/v1/keys/' + apiKey + '/rate-limit', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ rate_limit: limitNum })
@@ -957,7 +957,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
         }
         dailyLimit = limitNum;
       }
-      const response = await fetch('/api/keys/' + apiKey + '/daily-limit', {
+      const response = await fetch('/api/v1/keys/' + apiKey + '/daily-limit', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ daily_limit: dailyLimit })
@@ -969,7 +969,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
     async function editDescription(apiKey, currentDesc) {
       const newDesc = prompt('Enter new description:', currentDesc);
       if (newDesc === null) return;
-      const response = await fetch('/api/keys/' + apiKey + '/description', {
+      const response = await fetch('/api/v1/keys/' + apiKey + '/description', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ description: newDesc })
@@ -1065,7 +1065,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
 
   <script>
     async function loadWebhooks() {
-      const response = await fetch('/api/webhooks', {
+      const response = await fetch('/api/v1/webhooks', {
         headers: { 'CSRF-Token': window.csrfToken }
       });
       if (response.ok) {
@@ -1092,7 +1092,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
       if (!clientId) return;
       const url = prompt('Enter webhook URL (https://...):');
       if (!url) return;
-      const response = await fetch('/api/webhook', {
+      const response = await fetch('/api/v1/webhook', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
         body: JSON.stringify({ client_id: clientId, url })
@@ -1107,7 +1107,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
 
     async function deleteWebhook(clientId) {
       if (!confirm('Delete webhook for ' + clientId + '?')) return;
-      const response = await fetch('/api/webhook/' + clientId, {
+      const response = await fetch('/api/v1/webhook/' + clientId, {
         method: 'DELETE',
         headers: { 'CSRF-Token': window.csrfToken }
       });
@@ -1145,7 +1145,7 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
       const clientId = document.getElementById('exportClientId').value.trim();
       const from = document.getElementById('exportFrom').value;
       const to = document.getElementById('exportTo').value;
-      let url = '/api/export/compliance?format=' + format;
+      let url = '/api/v1/export/compliance?format=' + format;
       if (clientId) url += '&client_id=' + encodeURIComponent(clientId);
       if (from) url += '&from=' + from;
       if (to) url += '&to=' + to;
@@ -1180,7 +1180,7 @@ app.get('/csrf-token', csrfProtection, (req, res) => {
 });
 
 // Admin endpoints
-app.post('/api/register', csrfProtection, (req, res) => {
+app.post('/api/v1/register', csrfProtection, (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { client_id, description } = req.body;
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
@@ -1214,7 +1214,7 @@ app.post('/api/register', csrfProtection, (req, res) => {
   attempt();
 });
 
-app.post('/api/revoke', csrfProtection, async (req, res) => {
+app.post('/api/v1/revoke', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'api_key is required' });
@@ -1230,7 +1230,7 @@ app.post('/api/revoke', csrfProtection, async (req, res) => {
 });
 
 // Rotate API key: generate new, revoke old
-app.post('/api/rotate', csrfProtection, async (req, res) => {
+app.post('/api/v1/rotate', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { api_key } = req.body;
   if (!api_key) return res.status(400).json({ error: 'api_key is required' });
@@ -1287,8 +1287,8 @@ app.post('/api/rotate', csrfProtection, async (req, res) => {
   res.json({ client_id, api_key: newApiKey, expires_at: expiresAt });
 });
 
-// PATCH /api/keys/:api_key/rate-limit - Update rate limit for an API key (admin only)
-app.patch('/api/keys/:api_key/rate-limit', csrfProtection, async (req, res) => {
+// PATCH /api/v1/keys/:api_key/rate-limit - Update rate limit for an API key (admin only)
+app.patch('/api/v1/keys/:api_key/rate-limit', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { api_key } = req.params;
   const { rate_limit } = req.body;
@@ -1307,8 +1307,8 @@ app.patch('/api/keys/:api_key/rate-limit', csrfProtection, async (req, res) => {
   res.json({ success: true, client_id: result.rows[0].client_id, rate_limit });
 });
 
-// PATCH /api/keys/:api_key/daily-limit - Update daily limit for an API key (admin only)
-app.patch('/api/keys/:api_key/daily-limit', csrfProtection, async (req, res) => {
+// PATCH /api/v1/keys/:api_key/daily-limit - Update daily limit for an API key (admin only)
+app.patch('/api/v1/keys/:api_key/daily-limit', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { api_key } = req.params;
   const { daily_limit } = req.body;
@@ -1327,8 +1327,8 @@ app.patch('/api/keys/:api_key/daily-limit', csrfProtection, async (req, res) => 
   res.json({ success: true, client_id: result.rows[0].client_id, daily_limit });
 });
 
-// PATCH /api/keys/:api_key/description - Update description for an API key (admin only)
-app.patch('/api/keys/:api_key/description', csrfProtection, async (req, res) => {
+// PATCH /api/v1/keys/:api_key/description - Update description for an API key (admin only)
+app.patch('/api/v1/keys/:api_key/description', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { api_key } = req.params;
   const { description } = req.body;
@@ -1353,15 +1353,15 @@ app.patch('/api/keys/:api_key/description', csrfProtection, async (req, res) => 
   });
 });
 
-// GET /api/webhooks - List all webhooks (admin only)
-app.get('/api/webhooks', csrfProtection, async (req, res) => {
+// GET /api/v1/webhooks - List all webhooks (admin only)
+app.get('/api/v1/webhooks', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const result = await pool.query('SELECT client_id, url, created_at, updated_at FROM webhooks ORDER BY client_id');
   res.json({ webhooks: result.rows });
 });
 
 // Webhook management endpoint (admin only)
-app.post('/api/webhook', csrfProtection, async (req, res) => {
+app.post('/api/v1/webhook', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { client_id, url } = req.body;
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });
@@ -1382,8 +1382,8 @@ app.post('/api/webhook', csrfProtection, async (req, res) => {
   res.json({ success: true, client_id, url });
 });
 
-// Optional: DELETE /api/webhook/:client_id to remove webhook
-app.delete('/api/webhook/:client_id', csrfProtection, async (req, res) => {
+// Optional: DELETE /api/v1/webhook/:client_id to remove webhook
+app.delete('/api/v1/webhook/:client_id', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { client_id } = req.params;
   await pool.query('DELETE FROM webhooks WHERE client_id = $1', [client_id]);
@@ -1392,8 +1392,8 @@ app.delete('/api/webhook/:client_id', csrfProtection, async (req, res) => {
   res.json({ success: true, client_id });
 });
 
-// GET /api/export/compliance - Export verifications for AGCOM (admin only)
-app.get('/api/export/compliance', csrfProtection, async (req, res) => {
+// GET /api/v1/export/compliance - Export verifications for AGCOM (admin only)
+app.get('/api/v1/export/compliance', csrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { format, from, to, client_id } = req.query;
   if (!['csv', 'pdf'].includes(format)) {
@@ -1514,8 +1514,8 @@ app.get('/api/export/compliance', csrfProtection, async (req, res) => {
   }
 });
 
-// GET /api/keys/:client_id - List all API keys for a specific client (admin only)
-app.get('/api/keys/:client_id', async (req, res) => {
+// GET /api/v1/keys/:client_id - List all API keys for a specific client (admin only)
+app.get('/api/v1/keys/:client_id', async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { client_id } = req.params;
   if (!client_id) return res.status(400).json({ error: 'client_id is required' });

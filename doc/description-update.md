@@ -4,7 +4,7 @@ Administrators can update the description of an existing API key without revokin
 
 ## Endpoint
 
-### `PATCH /api/keys/:api_key/description`
+### `PATCH /api/v1/keys/:api_key/description`
 
 **Authentication:** Admin (Basic Auth)
 

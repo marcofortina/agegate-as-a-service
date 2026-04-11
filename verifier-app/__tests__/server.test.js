@@ -70,7 +70,7 @@ jest.mock('pg', () => {
           }
           return Promise.resolve({ rows: [] });
         }
-        // Handle INSERT into api_keys (for /api/register tests or migration)
+        // Handle INSERT into api_keys (for /api/v1/register tests or migration)
         if (sql.includes('INSERT INTO api_keys')) {
           return Promise.resolve({ rows: [{ api_key: params[1] }] });
         }
@@ -103,7 +103,7 @@ jest.mock('pg', () => {
         if (sql.includes('WHERE created_by')) {
           return Promise.resolve({ rows: [{ count: 0 }] });
         }
-        // Handle query for /api/keys/:client_id
+        // Handle query for /api/v1/keys/:client_id
         if (sql.includes('SELECT api_key, created_at, expires_at, last_used_at, is_active, created_by, description FROM api_keys WHERE client_id = $1')) {
           return Promise.resolve({ rows: [{ api_key: 'test-key-123', created_at: new Date(), expires_at: null, last_used_at: null, is_active: true, created_by: 'admin', description: 'Test key' }] });
         }
@@ -219,9 +219,9 @@ describe('AgeGate as a Service - API Tests', () => {
     expect(res.text).toContain('Webhook Management');
   });
 
-  test('POST /verify - valid request with mock backend', async () => {
+  test('POST /api/v1/verify - valid request with mock backend', async () => {
     const res = await request(app)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', 'test-key-123')
       .send({ client_id: 'test.local', threshold: 18 });
 
@@ -231,7 +231,7 @@ describe('AgeGate as a Service - API Tests', () => {
     expect(res.body.proofType).toBeDefined();
   });
 
-  test('POST /verify - rate limit exceeded', async () => {
+  test('POST /api/v1/verify - rate limit exceeded', async () => {
     const Redis = require('ioredis');
 
     Redis.__mockInstance.multi.mockReturnValue({
@@ -244,14 +244,14 @@ describe('AgeGate as a Service - API Tests', () => {
     });
 
     const res = await request(app)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', 'rate-limit-key')
       .send({ client_id: 'test.local', threshold: 18 });
 
     expect(res.status).toBe(429);
   });
 
-  test('POST /verify - Zod validation error', async () => {
+  test('POST /api/v1/verify - Zod validation error', async () => {
     const Redis = require('ioredis');
 
     Redis.__mockInstance.multi.mockReturnValue({
@@ -264,7 +264,7 @@ describe('AgeGate as a Service - API Tests', () => {
     });
 
     const res = await request(app)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', 'test-key-123')
       .send({ threshold: 99 });
 
@@ -278,9 +278,9 @@ describe('AgeGate as a Service - API Tests', () => {
     expect(res.text).toContain('swagger');
   });
 
-  test('GET /stats with valid API key', async () => {
+  test('GET /api/v1/stats with valid API key', async () => {
     const res = await request(app)
-      .get('/stats')
+      .get('/api/v1/stats')
       .set('x-api-key', 'test-key-123')
       .expect(200);
 
@@ -288,18 +288,18 @@ describe('AgeGate as a Service - API Tests', () => {
     expect(res.body.total_verifications).toBe(42);
   });
 
-  test('GET /api/keys/:client_id returns keys for admin', async () => {
-    const res = await agent.get('/api/keys/test.local').expect(200);
+  test('GET /api/v1/keys/:client_id returns keys for admin', async () => {
+    const res = await agent.get('/api/v1/keys/test.local').expect(200);
 
     expect(res.body.client_id).toBe('test.local');
     expect(Array.isArray(res.body.keys)).toBe(true);
   });
 
-  test('POST /api/register with description', async () => {
+  test('POST /api/v1/register with description', async () => {
     const csrfToken = await getCsrfToken();
 
     const res = await agent
-      .post('/api/register')
+      .post('/api/v1/register')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: 'desc-test', description: 'My test key' })
       .expect(200);
@@ -309,7 +309,7 @@ describe('AgeGate as a Service - API Tests', () => {
     // In real DB, description would be stored.
   });
 
-  test('POST /api/register retries on key collision', async () => {
+  test('POST /api/v1/register retries on key collision', async () => {
     // Get the pool instance from the app (imported after mocks)
     const { pool } = require('../server');
     const originalQuery = pool.query;
@@ -336,7 +336,7 @@ describe('AgeGate as a Service - API Tests', () => {
     const csrfToken = await getCsrfToken();
 
     const res = await agent
-      .post('/api/register')
+      .post('/api/v1/register')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: 'collision-test', description: 'retry test' })
       .expect(200);
@@ -347,7 +347,7 @@ describe('AgeGate as a Service - API Tests', () => {
     pool.query = originalQuery;
   });
 
-  test('POST /api/rotate retries on key collision', async () => {
+  test('POST /api/v1/rotate retries on key collision', async () => {
     const { pool } = require('../server');
     const originalQuery = pool.query;
 
@@ -386,7 +386,7 @@ describe('AgeGate as a Service - API Tests', () => {
     // Register a key
     const csrfToken = await getCsrfToken();
     const reg = await agent
-      .post('/api/register')
+      .post('/api/v1/register')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: 'rotate-test' })
       .expect(200);
@@ -394,7 +394,7 @@ describe('AgeGate as a Service - API Tests', () => {
 
     // Rotate
     const res = await agent
-      .post('/api/rotate')
+      .post('/api/v1/rotate')
       .set('CSRF-Token', csrfToken)
       .send({ api_key: registeredKey })
       .expect(200);
@@ -404,7 +404,7 @@ describe('AgeGate as a Service - API Tests', () => {
 
     // Verify old key is revoked
     const verifyOld = await request(app)
-      .post('/verify')
+      .post('/api/v1/verify')
       .set('x-api-key', registeredKey)
       .send({ client_id: 'rotate-test', threshold: 18 })
       .expect(401);
@@ -413,19 +413,19 @@ describe('AgeGate as a Service - API Tests', () => {
     pool.query = originalQuery;
   });
 
-  test('PATCH /api/keys/:api_key/rate-limit updates rate limit', async () => {
+  test('PATCH /api/v1/keys/:api_key/rate-limit updates rate limit', async () => {
     // Register a key
     const csrfToken = await getCsrfToken();
 
     const reg = await agent
-      .post('/api/register')
+      .post('/api/v1/register')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: 'rate-test' })
       .expect(200);
     const apiKey = reg.body.api_key;
 
     const res = await agent
-      .patch(`/api/keys/${apiKey}/rate-limit`)
+      .patch(`/api/v1/keys/${apiKey}/rate-limit`)
       .set('CSRF-Token', csrfToken)
       .send({ rate_limit: 200 })
       .expect(200);
@@ -437,28 +437,28 @@ describe('AgeGate as a Service - API Tests', () => {
   });
 
   // Additional test: invalid rate_limit
-  test('PATCH /api/keys/:api_key/rate-limit rejects invalid values', async () => {
+  test('PATCH /api/v1/keys/:api_key/rate-limit rejects invalid values', async () => {
     const csrfToken = await getCsrfToken();
 
     const res = await agent
-      .patch('/api/keys/some-key/rate-limit')
+      .patch('/api/v1/keys/some-key/rate-limit')
       .set('CSRF-Token', csrfToken)
       .send({ rate_limit: 0 })
       .expect(400);
     expect(res.body.error).toContain('between 1 and 10000');
   });
 
-  test('PATCH /api/keys/:api_key/daily-limit updates daily limit', async () => {
+  test('PATCH /api/v1/keys/:api_key/daily-limit updates daily limit', async () => {
     const csrfToken = await getCsrfToken();
     const reg = await agent
-      .post('/api/register')
+      .post('/api/v1/register')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: 'daily-test' })
       .expect(200);
     const apiKey = reg.body.api_key;
 
     const res = await agent
-      .patch(`/api/keys/${apiKey}/daily-limit`)
+      .patch(`/api/v1/keys/${apiKey}/daily-limit`)
       .set('CSRF-Token', csrfToken)
       .send({ daily_limit: 500 })
       .expect(200);
@@ -466,29 +466,29 @@ describe('AgeGate as a Service - API Tests', () => {
     expect(res.body.daily_limit).toBe(500);
   });
 
-  test('PATCH /api/keys/:api_key/daily-limit rejects invalid values', async () => {
+  test('PATCH /api/v1/keys/:api_key/daily-limit rejects invalid values', async () => {
     const csrfToken = await getCsrfToken();
     const res = await agent
-      .patch('/api/keys/some-key/daily-limit')
+      .patch('/api/v1/keys/some-key/daily-limit')
       .set('CSRF-Token', csrfToken)
       .send({ daily_limit: 0 })
       .expect(400);
     expect(res.body.error).toContain('positive integer');
   });
 
-  test('PATCH /api/keys/:api_key/description updates description', async () => {
+  test('PATCH /api/v1/keys/:api_key/description updates description', async () => {
     const csrfToken = await getCsrfToken();
 
     // Register a key
     const reg = await agent
-      .post('/api/register')
+      .post('/api/v1/register')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: 'desc-test' })
       .expect(200);
     const apiKey = reg.body.api_key;
 
     const res = await agent
-      .patch(`/api/keys/${apiKey}/description`)
+      .patch(`/api/v1/keys/${apiKey}/description`)
       .set('CSRF-Token', csrfToken)
       .send({ description: 'New description' })
       .expect(200);
@@ -496,39 +496,39 @@ describe('AgeGate as a Service - API Tests', () => {
     expect(res.body.description).toBe('New description');
   });
 
-  test('PATCH /api/keys/:api_key/description rejects invalid input', async () => {
+  test('PATCH /api/v1/keys/:api_key/description rejects invalid input', async () => {
     const csrfToken = await getCsrfToken();
 
     const res = await agent
-      .patch('/api/keys/some-key/description')
+      .patch('/api/v1/keys/some-key/description')
       .set('CSRF-Token', csrfToken)
       .send({ description: 123 }) // not a string
       .expect(400);
     expect(res.body.error).toContain('must be a string');
   });
 
-  test('PATCH /api/keys/:api_key/description returns 404 for nonexistent key', async () => {
+  test('PATCH /api/v1/keys/:api_key/description returns 404 for nonexistent key', async () => {
     const csrfToken = await getCsrfToken();
 
     const res = await agent
-      .patch('/api/keys/nonexistent/description')
+      .patch('/api/v1/keys/nonexistent/description')
       .set('CSRF-Token', csrfToken)
       .send({ description: 'test' })
       .expect(404);
     expect(res.body.error).toContain('API key not found');
   });
 
-  test('GET /client/description returns description', async () => {
+  test('GET /api/v1/client/description returns description', async () => {
     const res = await request(app)
-      .get('/client/description')
+      .get('/api/v1/client/description')
       .set('x-api-key', 'test-key-123')
       .expect(200);
     expect(res.body.description).toBe('Test description');
   });
 
-  test('PATCH /client/description updates description', async () => {
+  test('PATCH /api/v1/client/description updates description', async () => {
     const res = await request(app)
-      .patch('/client/description')
+      .patch('/api/v1/client/description')
       .set('x-api-key', 'test-key-123')
       .send({ description: 'New client description' })
       .expect(200);
@@ -536,9 +536,9 @@ describe('AgeGate as a Service - API Tests', () => {
     expect(res.body.description).toBe('New client description');
   });
 
-  test('POST /client/rotate returns new API key', async () => {
+  test('POST /api/v1/client/rotate returns new API key', async () => {
     const res = await request(app)
-      .post('/client/rotate')
+      .post('/api/v1/client/rotate')
       .set('x-api-key', 'test-key-123')
       .expect(200);
     expect(res.body.api_key).toMatch(/^agk_[a-f0-9]{48}$/);
@@ -546,19 +546,19 @@ describe('AgeGate as a Service - API Tests', () => {
     // Revocation verification is omitted in unit test (covered by integration tests)
   });
 
-  test('GET /client/dashboard returns HTML', async () => {
+  test('GET /api/v1/client/dashboard returns HTML', async () => {
     const res = await request(app)
-      .get('/client/dashboard')
+      .get('/api/v1/client/dashboard')
       .set('x-api-key', 'test-key-123')
       .expect(200);
     expect(res.text).toContain('Age Gate Client Dashboard');
   });
 
-  test('POST /api/webhook sets webhook URL', async () => {
+  test('POST /api/v1/webhook sets webhook URL', async () => {
     const csrfToken = await getCsrfToken();
 
     const res = await agent
-      .post('/api/webhook')
+      .post('/api/v1/webhook')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: 'test-client', url: 'https://example.com/callback' })
       .expect(200);
@@ -566,61 +566,61 @@ describe('AgeGate as a Service - API Tests', () => {
     expect(res.body.url).toBe('https://example.com/callback');
   });
 
-  test('POST /api/webhook rejects invalid URL', async () => {
+  test('POST /api/v1/webhook rejects invalid URL', async () => {
     const csrfToken = await getCsrfToken();
 
     const res = await agent
-      .post('/api/webhook')
+      .post('/api/v1/webhook')
       .set('CSRF-Token', csrfToken)
       .send({ client_id: 'test-client', url: 'not-a-url' })
       .expect(400);
     expect(res.body.error).toContain('Invalid URL');
   });
 
-  test('DELETE /api/webhook/:client_id removes webhook', async () => {
+  test('DELETE /api/v1/webhook/:client_id removes webhook', async () => {
     const csrfToken = await getCsrfToken();
 
     await agent
-      .delete('/api/webhook/test-client')
+      .delete('/api/v1/webhook/test-client')
       .set('CSRF-Token', csrfToken)
       .expect(200);
     // For unit test, we trust the mock; no further check needed
   });
 
-  test('GET /api/webhooks returns list', async () => {
+  test('GET /api/v1/webhooks returns list', async () => {
     const csrfToken = await getCsrfToken();
 
     const res = await agent
-      .get('/api/webhooks')
+      .get('/api/v1/webhooks')
       .set('CSRF-Token', csrfToken)
       .expect(200);
     expect(Array.isArray(res.body.webhooks)).toBe(true);
   });
 
-  test('GET /api/export/compliance?format=csv returns CSV file', async () => {
+  test('GET /api/v1/export/compliance?format=csv returns CSV file', async () => {
     const csrfToken = await getCsrfToken();
     const res = await agent
-      .get('/api/export/compliance?format=csv')
+      .get('/api/v1/export/compliance?format=csv')
       .set('CSRF-Token', csrfToken)
       .expect(200);
     expect(res.headers['content-type']).toMatch(/^text\/csv/);
     expect(res.text).toContain('client_id,date,total_verifications,successful,success_rate,avg_threshold');
   });
 
-  test('GET /api/export/compliance?format=pdf returns PDF file', async () => {
+  test('GET /api/v1/export/compliance?format=pdf returns PDF file', async () => {
     const csrfToken = await getCsrfToken();
     const res = await agent
-      .get('/api/export/compliance?format=pdf')
+      .get('/api/v1/export/compliance?format=pdf')
       .set('CSRF-Token', csrfToken)
       .expect(200);
     expect(res.headers['content-type']).toBe('application/pdf');
     expect(res.headers['content-disposition']).toContain('attachment; filename="agcom_export.pdf"');
   });
 
-  test('GET /api/export/compliance with invalid format returns 400', async () => {
+  test('GET /api/v1/export/compliance with invalid format returns 400', async () => {
     const csrfToken = await getCsrfToken();
     await agent
-      .get('/api/export/compliance?format=invalid')
+      .get('/api/v1/export/compliance?format=invalid')
       .set('CSRF-Token', csrfToken)
       .expect(400);
   });

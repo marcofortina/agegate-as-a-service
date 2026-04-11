@@ -1,17 +1,17 @@
 # Statistics API Endpoint
 
-## `GET /stats`
+### `GET /api/v1/stats`
 
 Returns verification statistics for the authenticated client.
 
 ### Authentication
 
-Same as `/verify` – provide your API key in the `x-api-key` header.
+Same as `/api/v1/verify` – provide your API key in the `x-api-key` header.
 
 ### Example Request
 
 ```bash
-curl -H "x-api-key: agk_..." https://agegate.yourdomain.com/stats
+curl -H "x-api-key: agk_..." https://agegate.yourdomain.com/api/v1/stats
 ```
 
 ### Response (200 OK)
@@ -41,7 +41,7 @@ curl -H "x-api-key: agk_..." https://agegate.yourdomain.com/stats
 
 ### Rate Limiting
 
-The `/stats` endpoint is limited to **100 requests per minute** per API key (to prevent abuse).
+The `/api/v1/stats` endpoint is limited to **100 requests per minute** per API key (to prevent abuse).
 
 ### Usage Example (Client Side)
 
