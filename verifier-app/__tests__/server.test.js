@@ -28,6 +28,7 @@ jest.mock('ioredis', () => {
     expire: jest.fn(),
     decr: jest.fn(),
     del: jest.fn(),
+    setex: jest.fn().mockResolvedValue('OK'),
     ping: jest.fn().mockResolvedValue('PONG'),
     quit: jest.fn()
   };
@@ -217,6 +218,109 @@ describe('AgeGate as a Service - API Tests', () => {
     const res = await agent.get('/dashboard').expect(200);
     expect(res.text).toContain('AgeGate Dashboard');
     expect(res.text).toContain('Webhook Management');
+  });
+
+  test('POST /login regenerates the session id', async () => {
+    const loginPage = await request(app).get('/login').expect(200);
+    const csrfMatch = loginPage.text.match(/name="_csrf" value="([^"]+)"/);
+    expect(csrfMatch).not.toBeNull();
+
+    const initialCookie = (loginPage.headers['set-cookie'] || [])
+      .find(c => c.startsWith('agegate.sid='));
+
+    const loginReq = request(app)
+      .post('/login')
+      .set('CSRF-Token', csrfMatch[1])
+      .send({ user: ADMIN_USER, pass: ADMIN_PASS });
+
+    if (initialCookie) {
+      loginReq.set('Cookie', initialCookie.split(';')[0]);
+    }
+
+    const loginRes = await loginReq.expect(302);
+    expect(loginRes.headers.location).toBe('/dashboard');
+
+    const newCookie = (loginRes.headers['set-cookie'] || [])
+      .find(c => c.startsWith('agegate.sid='));
+    expect(newCookie).toBeDefined();
+
+    if (initialCookie) {
+      expect(newCookie.split(';')[0]).not.toBe(initialCookie.split(';')[0]);
+    }
+  });
+
+  test('Authenticated dashboard renews the session cookie with 15 minute max-age', async () => {
+    const res = await agent.get('/dashboard').expect(200);
+    const sessionCookie = (res.headers['set-cookie'] || [])
+      .find(c => c.startsWith('agegate.sid='));
+    expect(sessionCookie).toBeDefined();
+
+    const expiresMatch = sessionCookie.match(/Expires=([^;]+)/i);
+    expect(expiresMatch).not.toBeNull();
+    const now = Date.now();
+    const expiresAt = new Date(expiresMatch[1]).getTime();
+    const deltaMs = expiresAt - now;
+    expect(deltaMs).toBeGreaterThanOrEqual(13.5 * 60 * 1000);
+    expect(deltaMs).toBeLessThanOrEqual(16.5 * 60 * 1000);
+  });
+
+  test('Session secret rotation retains current and previous secrets for 7 days', async () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const freshSecret = 'fresh-secret-a';
+    const staleSecret = 'stale-secret-b';
+
+    let loadSessionSecrets, rotateSessionSecret, getSessionSecretsSnapshot;
+    let mockGet, mockSetex;
+
+    jest.isolateModules(() => {
+      const Redis = require('ioredis');
+
+      mockGet = jest.fn().mockResolvedValueOnce(
+        JSON.stringify([
+          { secret: freshSecret, createdAt: now - (6 * DAY_MS) },
+          { secret: staleSecret, createdAt: now - (8 * DAY_MS) }
+        ])
+      );
+
+      mockSetex = jest.fn().mockResolvedValue('OK');
+
+      Redis.mockImplementation(() => ({
+        get: mockGet,
+        setex: mockSetex,
+        multi: jest.fn(),
+        set: jest.fn(),
+        expire: jest.fn(),
+        decr: jest.fn(),
+        del: jest.fn(),
+        ping: jest.fn().mockResolvedValue('PONG'),
+        quit: jest.fn().mockResolvedValue(undefined),
+      }));
+
+      const module = require('../server');
+      loadSessionSecrets = module.loadSessionSecrets;
+      rotateSessionSecret = module.rotateSessionSecret;
+      getSessionSecretsSnapshot = module.getSessionSecretsSnapshot;
+    });
+
+    await loadSessionSecrets();
+
+    expect(getSessionSecretsSnapshot()).toContain(freshSecret);
+    expect(getSessionSecretsSnapshot()).not.toContain(staleSecret);
+
+    const beforeRotate = getSessionSecretsSnapshot();
+    await rotateSessionSecret();
+    const afterRotate = getSessionSecretsSnapshot();
+
+    expect(afterRotate[0]).not.toBe(beforeRotate[0]);
+    expect(afterRotate.length).toBeLessThanOrEqual(8);
+
+    const storedValue = mockSetex.mock.calls[mockSetex.mock.calls.length - 1][2];
+    const storedEntries = JSON.parse(storedValue);
+    expect(Array.isArray(storedEntries)).toBe(true);
+    expect(storedEntries[0]).toEqual(
+      expect.objectContaining({ secret: expect.any(String), createdAt: expect.any(Number) })
+    );
   });
 
   test('POST /api/v1/verify - valid request with mock backend', async () => {

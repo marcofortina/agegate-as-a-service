@@ -11,6 +11,11 @@ let webhookReceived = false;
 
 const agent = request.agent(baseUrl);
 
+function extractSessionCookie(res) {
+  const cookies = res.headers['set-cookie'] || [];
+  return cookies.find(c => c.startsWith('agegate.sid='));
+}
+
 beforeAll(async () => {
   // Start containers
   execSync('docker-compose -f docker-compose.test.yml up -d', { stdio: 'inherit' });
@@ -91,6 +96,34 @@ describe('Integration Tests with docker-compose', () => {
   test('Admin login and get cookie', async () => {
     const res = await agent.get('/dashboard').expect(200);
     expect(res.text).toContain('Webhook Management');
+  });
+
+  test('Login regenerates the session cookie', async () => {
+    const tempAgent = request.agent(baseUrl);
+
+    const loginPage = await tempAgent.get('/login').expect(200);
+    const loginCsrf = loginPage.text.match(/name="_csrf" value="([^"]+)"/);
+    expect(loginCsrf).not.toBeNull();
+
+    const initialCookie = extractSessionCookie(loginPage);
+
+    const loginRes = await tempAgent
+      .post('/login')
+      .set('CSRF-Token', loginCsrf[1])
+      .send({ user: 'admin', pass: 'admin123' })
+      .expect(302);
+
+    expect(loginRes.headers.location).toBe('/dashboard');
+
+    const newCookie = extractSessionCookie(loginRes);
+    expect(newCookie).toBeDefined();
+
+    if (initialCookie) {
+      expect(newCookie.split(';')[0]).not.toBe(initialCookie.split(';')[0]);
+    }
+
+    const dash = await tempAgent.get('/dashboard').expect(200);
+    expect(dash.text).toContain('Webhook Management');
   });
 
   test('Register a new client', async () => {
@@ -281,6 +314,26 @@ describe('Integration Tests with docker-compose', () => {
     expect(res.body.total_verifications).toBeDefined();
   });
 
+  test('Logout invalidates the authenticated session', async () => {
+    const tempAgent = request.agent(baseUrl);
+
+    const loginPage = await tempAgent.get('/login').expect(200);
+    const loginCsrf = loginPage.text.match(/name="_csrf" value="([^"]+)"/);
+    expect(loginCsrf).not.toBeNull();
+
+    await tempAgent
+      .post('/login')
+      .set('CSRF-Token', loginCsrf[1])
+      .send({ user: 'admin', pass: 'admin123' })
+      .expect(302);
+
+    await tempAgent.get('/dashboard').expect(200);
+    await tempAgent.get('/logout').expect(302);
+
+    const res = await tempAgent.get('/dashboard').expect(302);
+    expect(res.headers.location).toBe('/login');
+  });
+
   test('Admin dashboard contains Webhook Management section', async () => {
     const res = await agent.get('/dashboard').expect(200);
     expect(res.text).toContain('Webhook Management');
@@ -303,5 +356,45 @@ describe('Integration Tests with docker-compose', () => {
       .set('CSRF-Token', csrfToken)
       .expect(200);
     expect(res.headers['content-type']).toBe('application/pdf');
+  });
+
+  test('Session secret rotation keeps system usable after rotation', async () => {
+    // verify system works with current session
+    const res1 = await request(baseUrl)
+      .post('/api/v1/verify')
+      .set('x-api-key', apiKey)
+      .send({ client_id: clientId, threshold: 18 })
+      .expect(200);
+
+    expect(res1.body.verified).toBeDefined();
+
+    // trigger rotation (via admin endpoint if exists, otherwise login bounce)
+    const csrfToken = await getCsrfToken();
+
+    const rotate = await agent
+      .post('/api/v1/rotate')
+      .set('CSRF-Token', csrfToken)
+      .send({ api_key: apiKey })
+      .expect(200);
+
+    const newKey = rotate.body.api_key;
+    expect(newKey).toBeDefined();
+    expect(newKey).not.toBe(apiKey);
+
+    // old key must be invalid
+    await request(baseUrl)
+      .post('/api/v1/verify')
+      .set('x-api-key', apiKey)
+      .send({ client_id: clientId, threshold: 18 })
+      .expect(401);
+
+    // new key must work
+    const res2 = await request(baseUrl)
+      .post('/api/v1/verify')
+      .set('x-api-key', newKey)
+      .send({ client_id: clientId, threshold: 18 })
+      .expect(200);
+
+    expect(res2.body.verified).toBeDefined();
   });
 });

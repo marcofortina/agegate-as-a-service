@@ -208,21 +208,138 @@ class RedisSessionStore extends session.Store {
   }
 }
 
+const SESSION_SECRETS_KEY = 'session_secrets';
+const SESSION_SECRET_RETENTION_SECONDS = 7 * 24 * 60 * 60;
+const SESSION_SECRET_RETENTION_MS = SESSION_SECRET_RETENTION_SECONDS * 1000;
+const SESSION_SECRET_HISTORY_LIMIT = 8; // current + 7 previous daily secrets
+const sessionSecretEntries = [{ secret: SESSION_SECRET, createdAt: Date.now() }];
+const sessionSecrets = [SESSION_SECRET];
+
+function syncSessionSecrets() {
+  sessionSecrets.splice(0, sessionSecrets.length, ...sessionSecretEntries.map(entry => entry.secret));
+}
+
+function normalizeSessionSecretEntries(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map(entry => {
+        if (typeof entry === 'string') {
+          return { secret: entry, createdAt: Date.now() };
+        }
+        if (entry && typeof entry.secret === 'string') {
+          return {
+            secret: entry.secret,
+            createdAt: Number(entry.createdAt) || Date.now()
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function pruneExpiredSessionSecretEntries(now = Date.now()) {
+  const fresh = sessionSecretEntries.filter(
+    entry => now - entry.createdAt <= SESSION_SECRET_RETENTION_MS
+  );
+
+  if (fresh.length === 0) {
+    fresh.push({ secret: SESSION_SECRET, createdAt: now });
+  }
+
+  sessionSecretEntries.splice(0, sessionSecretEntries.length, ...fresh);
+  syncSessionSecrets();
+}
+
 const sessionOptions = {
   name: 'agegate.sid',
-  secret: SESSION_SECRET,
+  secret: sessionSecrets,
   resave: false,
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
     secure: isHttps,
     sameSite: 'strict',
-    maxAge: 3600000
-  }
+    maxAge: 15 * 60 * 1000
+  },
+  rolling: true
 };
 
 if (process.env.NODE_ENV !== 'test') {
   sessionOptions.store = new RedisSessionStore(redis);
+}
+
+let sessionSecretRotationTimer;
+
+async function loadSessionSecrets() {
+  try {
+    const raw = await redis.get(SESSION_SECRETS_KEY);
+
+    if (!raw) {
+      pruneExpiredSessionSecretEntries();
+      await redis.setex(
+        SESSION_SECRETS_KEY,
+        SESSION_SECRET_RETENTION_SECONDS,
+        JSON.stringify(sessionSecretEntries)
+      );
+      return;
+    }
+
+    const parsed = normalizeSessionSecretEntries(raw)
+      .filter(entry => Date.now() - entry.createdAt <= SESSION_SECRET_RETENTION_MS)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, SESSION_SECRET_HISTORY_LIMIT);
+
+    if (parsed.length > 0) {
+      sessionSecretEntries.splice(0, sessionSecretEntries.length, ...parsed);
+      syncSessionSecrets();
+      logger.info({ count: sessionSecrets.length }, 'Loaded session secrets');
+      return;
+    }
+
+    pruneExpiredSessionSecretEntries();
+    await redis.setex(
+      SESSION_SECRETS_KEY,
+      SESSION_SECRET_RETENTION_SECONDS,
+      JSON.stringify(sessionSecretEntries)
+    );
+  } catch (err) {
+    logger.error({ err }, 'Failed to load session secrets');
+  }
+}
+
+async function rotateSessionSecret() {
+  try {
+    const newSecret = crypto.randomBytes(32).toString('hex');
+    const now = Date.now();
+    pruneExpiredSessionSecretEntries(now);
+
+    const updated = [
+      { secret: newSecret, createdAt: now },
+      ...sessionSecretEntries
+    ]
+      .filter((entry, index, array) => array.findIndex(item => item.secret === entry.secret) === index)
+      .filter(entry => now - entry.createdAt <= SESSION_SECRET_RETENTION_MS)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, SESSION_SECRET_HISTORY_LIMIT);
+
+    await redis.setex(
+      SESSION_SECRETS_KEY,
+      SESSION_SECRET_RETENTION_SECONDS,
+      JSON.stringify(updated)
+    );
+
+    sessionSecretEntries.splice(0, sessionSecretEntries.length, ...updated);
+    syncSessionSecrets();
+    logger.info('Session secret rotated');
+  } catch (err) {
+    logger.error({ err }, 'Session secret rotation failed');
+  }
 }
 
 app.use(session(sessionOptions));
@@ -450,12 +567,21 @@ app.post('/login', csrfProtection, (req, res) => {
   }
 
   req.session.regenerate(err => {
-    if (err) return res.status(500).send('Login failed');
+    if (err) {
+      logger.error({ err }, 'Session regeneration failed during login');
+      return res.status(500).send('Login failed');
+    }
 
     req.session.adminUser = user;
+    req.session.loginAt = Date.now();
+
     req.session.save(saveErr => {
-      if (saveErr) return res.status(500).send('Login failed');
-      res.redirect('/dashboard');
+      if (saveErr) {
+        logger.error({ saveErr }, 'Session save failed during login');
+        return res.status(500).send('Login failed');
+      }
+
+      return res.redirect('/dashboard');
     });
   });
 });
@@ -1599,13 +1725,23 @@ let server;
 
 async function startServer() {
   try {
+    await loadSessionSecrets();
+
+    if (process.env.NODE_ENV !== 'test' && !sessionSecretRotationTimer) {
+      sessionSecretRotationTimer = setInterval(() => {
+        rotateSessionSecret().catch(err => {
+          logger.error({ err }, 'Scheduled session secret rotation failed');
+        });
+      }, 24 * 60 * 60 * 1000);
+      sessionSecretRotationTimer.unref();
+    }
+
     await initDB();
     logger.info('Database initialized');
 
     server = app.listen(PORT, () => {
       logger.info(`Age Gate as a Service v${require('./package.json').version} listening on port ${PORT}`);
     });
-
   } catch (err) {
     logger.error(err, 'Database initialization failed');
     process.exit(1);
@@ -1623,6 +1759,11 @@ const shutdown = async () => {
   if (shuttingDown) return;
   shuttingDown = true;
 
+  if (sessionSecretRotationTimer) {
+    clearInterval(sessionSecretRotationTimer);
+    sessionSecretRotationTimer = undefined;
+  }
+
   logger.info('SIGTERM/SIGINT received – closing gracefully');
   if (server && server.listening) {
     server.close(async () => {
@@ -1639,4 +1780,11 @@ const shutdown = async () => {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-module.exports = { app, getServer: () => server, pool };
+function getSessionSecretsSnapshot() {
+  return [...sessionSecrets];
+}
+
+module.exports = {
+  app, getServer: () => server, pool,
+  loadSessionSecrets, rotateSessionSecret, getSessionSecretsSnapshot
+};
