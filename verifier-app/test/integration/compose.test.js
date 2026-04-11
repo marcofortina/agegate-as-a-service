@@ -50,7 +50,6 @@ beforeAll(async () => {
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
       webhookReceived = true;
-      console.log('Webhook received:', body);
       res.writeHead(200);
       res.end();
     });
@@ -72,9 +71,21 @@ beforeAll(async () => {
     .expect(302);
 }, 60000);
 
-afterAll(() => {
-  if (serverProcess) serverProcess.kill('SIGTERM');
-  if (webhookServer) webhookServer.close();
+afterAll(async () => {
+  // Terminate the server process and wait for it to exit
+  if (serverProcess) {
+    const exitPromise = new Promise(resolve => serverProcess.once('exit', resolve));
+    serverProcess.kill('SIGTERM');
+    await exitPromise;
+  }
+
+  if (webhookServer) {
+    await Promise.race([
+      new Promise(resolve => webhookServer.close(resolve)),
+      new Promise(resolve => setTimeout(resolve, 2000))
+    ]);
+  }
+
   execSync('docker-compose -f docker-compose.test.yml down -v', { stdio: 'ignore' });
 }, 60000);
 
@@ -150,7 +161,6 @@ describe('Integration Tests with docker-compose', () => {
 
   test('Register webhook', async () => {
     const csrfToken = await getCsrfToken();
-    console.log('Registering webhook for client', clientId);
     await agent
       .post('/api/v1/webhook')
       .set('CSRF-Token', csrfToken)
@@ -161,7 +171,6 @@ describe('Integration Tests with docker-compose', () => {
   test('Webhook is called on verification', async () => {
     // Perform a verification to trigger the webhook
     webhookReceived = false; // reset flag
-    console.log('Triggering verification for client', clientId);
     const res = await request(baseUrl)
       .post('/api/v1/verify')
       .set('x-api-key', apiKey)

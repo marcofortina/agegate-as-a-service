@@ -6,6 +6,11 @@ try {
 process.env.ANONYMIZE_IP = 'false';
 process.env.NODE_ENV = 'test';
 process.env.SESSION_SECRET = 'test-session-secret';
+
+// Reduce log verbosity during tests to keep output clean
+process.env.LOG_LEVEL = 'error';
+
+// Use ADMIN_PASS from environment
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS || 'admin123';
 
