@@ -81,6 +81,8 @@ kubectl cp agegate/redis-6c6fcd64b8-n7zm6:/data/dump.rdb ./redis_backup.rdb
 
 ## Scheduled Backups (CronJob)
 
+### Automated Backup using Kubernetes CronJob
+
 You can create a Kubernetes CronJob to automate daily backups.
 
 Example CronJob manifest (`cronjob-backup.yaml`):
@@ -113,6 +115,18 @@ spec:
             persistentVolumeClaim:
               claimName: backup-pvc
           restartPolicy: OnFailure
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-pvc
+  namespace: agegate
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
 ```
 
 Apply it with:
@@ -120,3 +134,5 @@ Apply it with:
 ```bash
 kubectl apply -f cronjob-backup.yaml
 ```
+
+For Redis backup, apply k8s/redis-backup-cronjob.yaml and the required RBAC (k8s/backup-sa.yaml).

@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: agegate-backup
+  namespace: agegate
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: agegate-backup-sa
+          containers:
+          - name: backup
+            image: postgres:14
+            env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agegate-secrets
+                  key: TIMESCALEDB_PASSWORD
+            - name: PGUSER
+              value: postgres
+            - name: PGHOST
+              value: timescaledb.agegate.svc.cluster.local
+            - name: PGDATABASE
+              value: agegate
+            - name: BACKUP_DIR
+              value: /backup
+            command:
+            - /bin/sh
+            - -e
+            - -c
+            - |
+              BACKUP_FILE="${BACKUP_DIR}/agegate_$(date +%Y%m%d_%H%M%S).dump"
+              echo "Starting backup to ${BACKUP_FILE}"
+              pg_dump -Fc -v > "${BACKUP_FILE}"
+              echo "Backup completed: ${BACKUP_FILE}"
+              # Optional: compress and upload to S3 (requires aws-cli)
+              # gzip "${BACKUP_FILE}"
+              # aws s3 cp "${BACKUP_FILE}.gz" s3://your-bucket/agegate-backups/
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: agegate-backup-pvc
+          restartPolicy: OnFailure

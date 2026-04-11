@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: agegate-redis-backup
+  namespace: agegate
+spec:
+  schedule: "0 2 * * *"  # daily at 2:00 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: agegate-backup-sa  # needs permission to exec and cp
+          containers:
+          - name: redis-backup
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              REDIS_POD=$(kubectl get pods -n agegate -l app=redis -o jsonpath='{.items[0].metadata.name}')
+              echo "Using Redis pod: $REDIS_POD"
+              kubectl exec -n agegate $REDIS_POD -- redis-cli SAVE
+              kubectl cp agegate/$REDIS_POD:/data/dump.rdb /backup/redis_$(date +\%Y\%m\%d).rdb
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: agegate-backup-pvc
+          restartPolicy: OnFailure
