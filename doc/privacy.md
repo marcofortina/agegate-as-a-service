@@ -1,5 +1,15 @@
 # Privacy & Double Anonymity Implementation
 
+> For the legal basis under GDPR, see [Legal Basis for Processing](./legal-basis.md).
+
+## GDPR Compliance
+
+This service processes personal data (anonymised IP addresses) on behalf of the data controller (the customer). The legal basis is legitimate interest (Art. 6(1)(f) GDPR). A Data Protection Impact Assessment (DPIA) will be conducted before production deployment.
+
+## Data Retention
+
+Verification records are automatically deleted after **30 days** (configurable via `RETENTION_DAYS`). This period is chosen to balance security needs with privacy. See `doc/legal-basis.md` for detailed rationale.
+
 ## EU Blueprint Compliance (ageverification.dev)
 
 Age Gate as a Service implements the **double anonymity** requirement from the EU Blueprint:
