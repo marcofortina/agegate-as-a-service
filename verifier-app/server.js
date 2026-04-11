@@ -475,6 +475,18 @@ async function initDB() {
     );
   `);
 
+  // Client branding table (white-label)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS client_branding (
+      client_id TEXT PRIMARY KEY,
+      logo_url TEXT,
+      primary_color VARCHAR(7) DEFAULT '#0f0',
+      secondary_color VARCHAR(7) DEFAULT '#222',
+      custom_domain TEXT,
+      footer_text TEXT
+    );
+  `);
+
   // Set retention policy (default: 30 days)
   const retentionDays = parseInt(process.env.RETENTION_DAYS || '30');
   if (retentionDays > 0) {
@@ -785,6 +797,34 @@ app.get('/api/v1/stats', async (req, res) => {
     daily_breakdown: daily,
     threshold_breakdown: thresholdBreakdown,
     weekly_breakdown: weeklyBreakdown
+  });
+});
+
+// GET /api/v1/branding/:client_id - Public endpoint for white-label branding
+app.get('/api/v1/branding/:client_id', async (req, res) => {
+  const { client_id } = req.params;
+  if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+
+  const result = await pool.query(
+    `SELECT logo_url, primary_color, secondary_color, custom_domain, footer_text
+     FROM client_branding
+     WHERE client_id = $1`,
+    [client_id]
+  );
+  if (result.rows.length === 0) {
+    // Return default branding
+    return res.json({
+      client_id,
+      logo_url: null,
+      primary_color: '#0f0',
+      secondary_color: '#222',
+      custom_domain: null,
+      footer_text: null
+    });
+  }
+  res.json({
+    client_id,
+    ...result.rows[0]
   });
 });
 
@@ -1372,6 +1412,69 @@ app.get('/dashboard', csrfProtection, async (req, res) => {
     }
   </script>
 
+  <div class="card">
+    <h2>Client Branding (White‑Label)</h2>
+    <label>Client ID:</label>
+    <select id="brandingClientId">
+      <option value="">-- Select a client --</option>
+      ${keys.rows.map(k => `<option value="${k.client_id}">${k.client_id}</option>`).join('')}
+    </select>
+    <button onclick="loadBranding()">Load</button>
+    <div id="brandingForm" style="display:none; margin-top:15px;">
+      <label>Logo URL:</label>
+      <input type="text" id="logoUrl" placeholder="https://example.com/logo.png"><br>
+      <label>Primary Color (hex):</label>
+      <input type="color" id="primaryColor" value="#0f0"><br>
+      <label>Secondary Color (hex):</label>
+      <input type="color" id="secondaryColor" value="#222"><br>
+      <label>Custom Domain:</label>
+      <input type="text" id="customDomain" placeholder="verify.client.com"><br>
+      <label>Footer Text:</label>
+      <input type="text" id="footerText" placeholder="Powered by AgeGate"><br>
+      <button onclick="saveBranding()">Save Branding</button>
+    </div>
+  </div>
+
+  <script>
+    async function loadBranding() {
+      const clientId = document.getElementById('brandingClientId').value;
+      if (!clientId) return;
+      const response = await fetch('/api/v1/branding/admin/' + clientId, {
+        headers: { 'CSRF-Token': window.csrfToken }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        document.getElementById('logoUrl').value = data.logo_url || '';
+        document.getElementById('primaryColor').value = data.primary_color || '#0f0';
+        document.getElementById('secondaryColor').value = data.secondary_color || '#222';
+        document.getElementById('customDomain').value = data.custom_domain || '';
+        document.getElementById('footerText').value = data.footer_text || '';
+        document.getElementById('brandingForm').style.display = 'block';
+      } else {
+        alert('Failed to load branding');
+      }
+    }
+
+    async function saveBranding() {
+      const clientId = document.getElementById('brandingClientId').value;
+      const payload = {
+        client_id: clientId,
+        logo_url: document.getElementById('logoUrl').value,
+        primary_color: document.getElementById('primaryColor').value,
+        secondary_color: document.getElementById('secondaryColor').value,
+        custom_domain: document.getElementById('customDomain').value,
+        footer_text: document.getElementById('footerText').value
+      };
+      const response = await fetch('/api/v1/branding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'CSRF-Token': window.csrfToken },
+        body: JSON.stringify(payload)
+      });
+      if (response.ok) alert('Branding saved');
+      else alert('Failed to save branding');
+    }
+  </script>
+
   <a href="/logout">Logout</a>
 </body>
 </html>`;
@@ -1737,6 +1840,62 @@ app.get('/api/v1/keys/:client_id', async (req, res) => {
       ...row,
       api_key: row.api_key.substring(0,12) + '...' // mask for safety
     }))
+  });
+});
+
+// Admin endpoint to update client branding
+app.post('/api/v1/branding', csrfProtection, async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { client_id, logo_url, primary_color, secondary_color, custom_domain, footer_text } = req.body;
+  if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+
+  // Validate colors (basic regex for hex)
+  const hexColorRegex = /^#[0-9A-Fa-f]{6}$/;
+  if (primary_color && !hexColorRegex.test(primary_color)) {
+    return res.status(400).json({ error: 'primary_color must be a valid hex color (#RRGGBB)' });
+  }
+  if (secondary_color && !hexColorRegex.test(secondary_color)) {
+    return res.status(400).json({ error: 'secondary_color must be a valid hex color (#RRGGBB)' });
+  }
+
+  await pool.query(
+    `INSERT INTO client_branding (client_id, logo_url, primary_color, secondary_color, custom_domain, footer_text)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (client_id) DO UPDATE SET
+       logo_url = EXCLUDED.logo_url,
+       primary_color = EXCLUDED.primary_color,
+       secondary_color = EXCLUDED.secondary_color,
+       custom_domain = EXCLUDED.custom_domain,
+       footer_text = EXCLUDED.footer_text`,
+    [client_id, logo_url || null, primary_color || '#0f0', secondary_color || '#222', custom_domain || null, footer_text || null]
+  );
+  const adminUser = getAdminUser(req);
+  await logAdminAction(adminUser, 'UPDATE_BRANDING', client_id, { client_id, logo_url, primary_color, secondary_color, custom_domain });
+  res.json({ success: true, client_id });
+});
+
+// Admin endpoint to get branding for a client
+app.get('/api/v1/branding/admin/:client_id', csrfProtection, async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { client_id } = req.params;
+  if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+
+  const result = await pool.query(
+    `SELECT logo_url, primary_color, secondary_color, custom_domain, footer_text
+     FROM client_branding
+     WHERE client_id = $1`,
+    [client_id]
+  );
+  if (result.rows.length === 0) {
+    return res.json({ client_id, logo_url: null, primary_color: '#0f0', secondary_color: '#222', custom_domain: null, footer_text: null });
+  }
+  res.json({
+    client_id,
+    logo_url: result.rows[0].logo_url,
+    primary_color: result.rows[0].primary_color,
+    secondary_color: result.rows[0].secondary_color,
+    custom_domain: result.rows[0].custom_domain,
+    footer_text: result.rows[0].footer_text
   });
 });
 

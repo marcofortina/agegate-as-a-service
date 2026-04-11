@@ -102,6 +102,23 @@ jest.mock('pg', () => {
           // Return a mock aggregated row
           return Promise.resolve({ rows: [{ client_id: 'test.local', date: new Date().toISOString().slice(0,10), total_verifications: 10, successful: 9, avg_threshold: 18.0 }] });
         }
+        // Handle SELECT from client_branding (for GET /api/v1/branding/:client_id)
+        if (sql.includes('FROM client_branding')) {
+          const clientId = params && params[0];
+          if (clientId === 'branding-test') {
+            return Promise.resolve({
+              rows: [{
+                logo_url: 'https://example.com/logo.png',
+                primary_color: '#ff0000',
+                secondary_color: '#00ff00',
+                custom_domain: 'verify.branding-test.com',
+                footer_text: 'Custom footer'
+              }]
+            });
+          } else {
+            return Promise.resolve({ rows: [] });
+          }
+        }
         // Handle SELECT rate_limit
         if (sql.includes('SELECT rate_limit FROM api_keys WHERE api_key = $1')) {
           return Promise.resolve({ rows: [{ rate_limit: 100 }] });
@@ -127,6 +144,10 @@ jest.mock('pg', () => {
             return Promise.resolve({ rows: [] });
           }
           return Promise.resolve({ rows: [{ client_id: 'desc-test' }] });
+        }
+        // Handle INSERT/UPDATE into client_branding (for POST /api/v1/branding)
+        if (sql.includes('INSERT INTO client_branding')) {
+          return Promise.resolve({ rows: [] });
         }
         // Handle all other queries
         return Promise.resolve({ rows: [] });
@@ -734,5 +755,49 @@ describe('AgeGate as a Service - API Tests', () => {
       .get('/api/v1/export/compliance?format=invalid')
       .set('CSRF-Token', csrfToken)
       .expect(400);
+  });
+
+  test('GET /api/v1/branding/:client_id returns default branding for unknown client', async () => {
+    const res = await request(app)
+      .get('/api/v1/branding/unknown-client')
+      .expect(200);
+    expect(res.body.client_id).toBe('unknown-client');
+    expect(res.body.primary_color).toBe('#0f0');
+    expect(res.body.secondary_color).toBe('#222');
+    expect(res.body.logo_url).toBeNull();
+  });
+
+  test('Admin POST /api/v1/branding updates branding', async () => {
+    const csrfToken = await getCsrfToken();
+    // First create a client via registration
+    await agent
+      .post('/api/v1/register')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'branding-test' })
+      .expect(200);
+
+    const res = await agent
+      .post('/api/v1/branding')
+      .set('CSRF-Token', csrfToken)
+      .send({
+        client_id: 'branding-test',
+        logo_url: 'https://example.com/logo.png',
+        primary_color: '#ff0000',
+        secondary_color: '#00ff00',
+        custom_domain: 'verify.branding-test.com',
+        footer_text: 'Custom footer'
+      })
+      .expect(200);
+    expect(res.body.success).toBe(true);
+
+    // Verify the branding is stored
+    const getRes = await request(app)
+      .get('/api/v1/branding/branding-test')
+      .expect(200);
+    expect(getRes.body.logo_url).toBe('https://example.com/logo.png');
+    expect(getRes.body.primary_color).toBe('#ff0000');
+    expect(getRes.body.secondary_color).toBe('#00ff00');
+    expect(getRes.body.custom_domain).toBe('verify.branding-test.com');
+    expect(getRes.body.footer_text).toBe('Custom footer');
   });
 });

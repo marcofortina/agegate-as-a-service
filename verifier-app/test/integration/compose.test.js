@@ -409,4 +409,31 @@ describe('Integration Tests with docker-compose', () => {
 
     expect(res2.body.verified).toBeDefined();
   });
+
+  test('Client branding is applied after admin update', async () => {
+    const csrfToken = await getCsrfToken();
+    // Register a client
+    await agent
+      .post('/api/v1/register')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'branding-integration-test' })
+      .expect(200);
+
+    // Update branding via admin endpoint
+    await agent
+      .post('/api/v1/branding')
+      .set('CSRF-Token', csrfToken)
+      .send({
+        client_id: 'branding-integration-test',
+        logo_url: 'https://example.com/integration-logo.png',
+        primary_color: '#123456'
+      })
+      .expect(200);
+
+    const res = await request(baseUrl)
+      .get('/api/v1/branding/branding-integration-test')
+      .expect(200);
+    expect(res.body.logo_url).toBe('https://example.com/integration-logo.png');
+    expect(res.body.primary_color).toBe('#123456');
+  });
 });
