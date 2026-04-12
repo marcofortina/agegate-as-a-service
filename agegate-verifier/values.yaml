@@ -65,6 +65,13 @@ env:
   OTEL_SERVICE_NAME: "agegate-verifier"
   OTEL_TRACES_ENDPOINT: "http://otel-collector:4318/v1/traces"
   OTEL_METRICS_ENDPOINT: "http://otel-collector:4318/v1/metrics"
+  # Email (self-onboarding)
+  SMTP_HOST: ""
+  SMTP_PORT: "587"
+  SMTP_SECURE: "false"
+  SMTP_USER: ""
+  SMTP_PASS: ""
+  FROM_EMAIL: "noreply@agegate.local"
 
 # Subcharts
 redis: {}

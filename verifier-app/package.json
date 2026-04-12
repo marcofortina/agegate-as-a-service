@@ -28,6 +28,7 @@
     "express-session": "^1.19.0",
     "helmet": "^8.0.0",
     "ioredis": "^5.10.1",
+    "nodemailer": "^8.0.5",
     "pdfkit": "^0.15.0",
     "pg": "^8.13.0",
     "pino": "^9.6.0",

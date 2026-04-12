@@ -464,4 +464,36 @@ describe('Integration Tests with docker-compose', () => {
     const res = await request(baseUrl).get('/pricing').expect(200);
     expect(res.text).toContain('Pro');
   });
+
+  test('Self‑onboarding: register a new client via public form', async () => {
+    const csrfToken = await getCsrfToken();
+    const res = await agent
+      .post('/api/v1/register/public')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'self-integration.com', email: 'integ@test.com' })
+      .expect(200);
+    expect(res.body.api_key).toMatch(/^agk_[a-f0-9]{48}$/);
+    // Verify that the key works
+    const verifyRes = await request(baseUrl)
+      .post('/api/v1/verify')
+      .set('x-api-key', res.body.api_key)
+      .send({ client_id: 'self-integration.com', threshold: 18 })
+      .expect(200);
+    expect(verifyRes.body.verified).toBe(true);
+  });
+
+  test('Self‑onboarding with custom default threshold', async () => {
+    const csrfToken = await getCsrfToken();
+    const res = await agent
+      .post('/api/v1/register/public')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'custom-threshold.com', email: 'test@example.com', threshold: 21 })
+      .expect(200);
+    const verifyRes = await request(baseUrl)
+      .post('/api/v1/verify')
+      .set('x-api-key', res.body.api_key)
+      .send({ client_id: 'custom-threshold.com' })  // no threshold
+      .expect(200);
+    expect(verifyRes.body.threshold).toBe(21);
+  });
 });

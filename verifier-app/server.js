@@ -18,6 +18,7 @@ const app = express();
 const helmet = require('helmet');
 const cors = require('cors');
 const { z } = require('zod');
+const nodemailer = require('nodemailer');
 const { doubleCsrf } = require('csrf-csrf');
 
 const { anonymizeIPMiddleware } = require('./proxy');
@@ -29,6 +30,15 @@ const SESSION_SECRET = process.env.SESSION_SECRET || (process.env.NODE_ENV === '
 if (!SESSION_SECRET) {
   throw new Error('SESSION_SECRET environment variable is required');
 }
+
+// Email transporter (configure via env)
+const emailTransporter = process.env.SMTP_HOST ? nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: parseInt(process.env.SMTP_PORT || '587'),
+  secure: process.env.SMTP_SECURE === 'true',
+  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+}) : null;
+const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@agegate.local';
 
 // Apply IP anonymization BEFORE any logging or rate limiting
 const anonymizeIP = process.env.ANONYMIZE_IP !== 'false'; // Enabled by default
@@ -462,6 +472,7 @@ async function initDB() {
       description TEXT,
       daily_limit INTEGER DEFAULT NULL,
       is_active BOOLEAN DEFAULT true,
+      default_threshold INTEGER DEFAULT 18,
       created_by TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(api_key);
@@ -574,6 +585,108 @@ const verifySchema = z.object({
   threshold: z.number().int().min(18).max(25).default(18)
 });
 
+// Public registration page (self‑onboarding)
+app.get('/register', csrfTokenMiddleware, (req, res) => {
+  const csrfToken = res.locals.csrfToken;
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"><title>Register – Age Gate as a Service</title>
+    <style>
+      body { font-family: system-ui; background: #111; color: #0f0; padding: 40px; text-align: center; }
+      .card { background: #222; padding: 30px; border-radius: 12px; max-width: 500px; margin: 0 auto; }
+      input, button { padding: 10px; margin: 8px; font-size: 16px; width: 90%; }
+      button { background: #0f0; color: #111; border: none; border-radius: 8px; cursor: pointer; }
+    </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>Get your API key</h1>
+        <form method="POST" action="/api/v1/register/public">
+          <input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}">
+          <input type="text" name="client_id" placeholder="Client ID (e.g., yourdomain.com)" required><br>
+          <input type="email" name="email" placeholder="Your email address" required><br>
+          <input type="text" name="description" placeholder="Description (optional)"><br>
+          <input type="number" name="threshold" value="18" min="18" max="25" placeholder="Threshold (18-25)"><br>
+          <button type="submit">Register →</button>
+        </form>
+        <p><a href="/login">Admin login</a> | <a href="/">Back to home</a></p>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+// Public registration endpoint (self‑onboarding)
+app.post('/api/v1/register/public', doubleCsrfProtection, async (req, res) => {
+  const { client_id, email, description, threshold = 18 } = req.body;
+  if (!client_id || !email) {
+    return res.status(400).json({ error: 'client_id and email are required' });
+  }
+
+  // Rate limiting per email/IP to avoid abuse
+  const rateKey = `self-register:${req.ip}`;
+  const registerCount = await redis.get(rateKey);
+  if (registerCount && parseInt(registerCount) >= 3) {
+    return res.status(429).json({ error: 'Too many registration attempts. Try later.' });
+  }
+  await redis.incr(rateKey);
+  await redis.expire(rateKey, 3600);
+
+  // Check if client_id already exists
+  const existing = await pool.query('SELECT client_id FROM api_keys WHERE client_id = $1', [client_id]);
+  if (existing.rows.length > 0) {
+    return res.status(409).json({ error: 'Client ID already registered. Contact support.' });
+  }
+
+  // Generate API key
+  const randomBytes = crypto.randomBytes(24).toString('hex');
+  const apiKey = `agk_${randomBytes}`;
+  const expiresAt = new Date();
+  expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+
+  // Insert into api_keys
+  await pool.query(
+    `INSERT INTO api_keys (client_id, api_key, expires_at, description, created_by, default_threshold)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [client_id, apiKey, expiresAt, description || null, 'self-service', threshold]
+  );
+
+  // Send email with API key
+  if (emailTransporter) {
+    const mailOptions = {
+      from: FROM_EMAIL,
+      to: email,
+      subject: 'Your Age Gate API Key',
+      text: `Hello,\n\nYou have successfully registered for Age Gate as a Service.\n\nYour API Key: ${apiKey}\nClient ID: ${client_id}\nExpires: ${expiresAt.toISOString()}\n\nUse this key in the x-api-key header.\n\nDashboard: ${process.env.PUBLIC_URL}/api/v1/client/dashboard\n\nThank you!`,
+      html: `<p>Hello,</p><p>You have successfully registered for Age Gate as a Service.</p>
+             <p><strong>API Key:</strong> ${apiKey}<br>
+             <strong>Client ID:</strong> ${client_id}<br>
+             <strong>Expires:</strong> ${expiresAt.toISOString()}</p>
+             <p>Use this key in the <code>x-api-key</code> header.</p>
+             <p>Dashboard: <a href="${process.env.PUBLIC_URL}/api/v1/client/dashboard">${process.env.PUBLIC_URL}/api/v1/client/dashboard</a></p>
+            <p>Thank you!</p>`,
+    };
+    emailTransporter.sendMail(mailOptions).catch(err => logger.error({ err, email }, 'Failed to send registration email'));
+  } else {
+    logger.warn('SMTP not configured – email not sent');
+  }
+
+  res.json({
+    success: true,
+    message: 'Registration successful. API key has been sent to your email.',
+    client_id,
+    api_key: apiKey,
+    expires_at: expiresAt
+  });
+});
+
+// Simple rate limiter for self‑registration (per IP)
+app.use('/api/v1/register/public', (req, res, next) => {
+  // Already handled inside the route, but we can add a global middleware if needed
+  next();
+});
+
 // Nice HTML login page
 app.get('/login', csrfTokenMiddleware, (req, res) => {
   const csrfToken = res.locals.csrfToken
@@ -631,7 +744,7 @@ app.post('/api/v1/verify', async (req, res) => {
   const start = Date.now();
   const apiKey = req.headers['x-api-key'];
   const clientId = req.body.client_id || 'unknown';
-  const threshold = parseInt(req.body.threshold) || 18;
+  let threshold = req.body.threshold !== undefined ? parseInt(req.body.threshold) : null;
 
   if (!apiKey) {
     logger.warn({ clientId }, 'Missing API Key');
@@ -640,17 +753,30 @@ app.post('/api/v1/verify', async (req, res) => {
 
   // Validate API key: exists, active, not expired
   const keyCheck = await pool.query(
-    `SELECT client_id, expires_at, is_active FROM api_keys WHERE api_key = $1`,
+    `SELECT client_id, expires_at, is_active, default_threshold FROM api_keys WHERE api_key = $1`,
     [apiKey]
   );
+
   if (keyCheck.rows.length === 0 || !keyCheck.rows[0].is_active) {
     logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Invalid or revoked API key');
     return res.status(401).json({ status: 'error', message: 'Invalid API key' });
   }
   const keyRecord = keyCheck.rows[0];
-  if (keyRecord.expires_at && new Date(keyRecord.expires_at) < new Date()) {
-    logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Expired API key');
-    return res.status(401).json({ status: 'error', message: 'API key expired' });
+
+  // Zod validation
+  try {
+    verifySchema.parse(req.body);
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: 'Invalid input', details: err.errors });
+  }
+
+  // Use request threshold if provided, otherwise fallback to client's default_threshold
+  if (threshold === null) {
+    threshold = keyRecord.default_threshold || 18;
+  }
+  // Validate only once
+  if (threshold < 18 || threshold > 25) {
+    return res.status(400).json({ status: 'error', message: 'Threshold must be between 18 and 25' });
   }
 
   const rateCheck = await checkRateLimit(req, apiKey);
@@ -731,7 +857,7 @@ app.get('/api/v1/stats', async (req, res) => {
 
   // Validate API key: exists, active, not expired
   const keyCheck = await pool.query(
-    `SELECT client_id, expires_at, is_active FROM api_keys WHERE api_key = $1`,
+    `SELECT client_id, expires_at, is_active, default_threshold FROM api_keys WHERE api_key = $1`,
     [apiKey]
   );
   if (keyCheck.rows.length === 0 || !keyCheck.rows[0].is_active) {

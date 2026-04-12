@@ -33,6 +33,7 @@ jest.mock('ioredis', () => {
     expire: jest.fn(),
     decr: jest.fn(),
     del: jest.fn(),
+    incr: jest.fn().mockResolvedValue(1),
     setex: jest.fn().mockResolvedValue('OK'),
     ping: jest.fn().mockResolvedValue('PONG'),
     quit: jest.fn()
@@ -44,16 +45,43 @@ jest.mock('ioredis', () => {
   return RedisMock;
 });
 
+const mockRegisteredClientIds = new Set();
+const mockRegisteredApiKeys = new Map();
+
 jest.mock('pg', () => {
   return {
     Pool: jest.fn().mockImplementation(() => ({
       query: jest.fn().mockImplementation((sql, params) => {
+        // Handle INSERT into api_keys (for /api/v1/register/public and /api/v1/register tests)
+        if (sql.includes('INSERT INTO api_keys')) {
+          if (params && params[0] && params[1]) {
+            const clientId = params[0];
+            const apiKey = params[1];
+            const defaultThreshold = params[5] ?? 18;
+
+            mockRegisteredClientIds.add(clientId);
+            mockRegisteredApiKeys.set(apiKey, {
+              client_id: clientId,
+              expires_at: null,
+              is_active: true,
+              default_threshold: defaultThreshold
+            });
+          }
+          return Promise.resolve({ rows: [{ api_key: params[1] }] });
+        }
+
         // Handle api_keys table queries
         if (sql.includes('FROM api_keys')) {
           const key = params ? params[0] : null;
 
+          if (sql.includes('SELECT client_id FROM api_keys WHERE client_id = $1')) {
+            return Promise.resolve({
+              rows: mockRegisteredClientIds.has(key) ? [{ client_id: key }] : []
+            });
+          }
+
           if (sql.includes('SELECT description FROM api_keys WHERE api_key = $1')) {
-            return Promise.resolve({ rows: [{ description: 'Test description' }] });
+            return Promise.resolve({ rows: [{ description: 'Test description', default_threshold: 18 }] });
           }
 
           if (sql.includes('UPDATE api_keys SET description = $1 WHERE api_key = $2')) {
@@ -61,24 +89,71 @@ jest.mock('pg', () => {
           }
 
           if (sql.includes('SELECT client_id, is_active, expires_at FROM api_keys WHERE api_key = $1')) {
-            return Promise.resolve({
-              rows: [{ client_id: 'test.local', is_active: true, expires_at: null }]
-            });
+            if (mockRegisteredApiKeys.has(key)) {
+              const entry = mockRegisteredApiKeys.get(key);
+              if (!entry.is_active) {
+                return Promise.resolve({ rows: [] });
+              }
+              return Promise.resolve({
+                rows: [{
+                  client_id: entry.client_id,
+                  is_active: entry.is_active,
+                  expires_at: entry.expires_at
+                }]
+              });
+            }
+
+            if (key === 'test-key-123' || key === 'rate-limit-key') {
+              return Promise.resolve({
+                rows: [{
+                  client_id: 'test.local',
+                  is_active: true,
+                  expires_at: null
+                }]
+              });
+            }
+
+            return Promise.resolve({ rows: [] });
           }
 
-          if (sql.includes('UPDATE api_keys SET is_active = false WHERE api_key = $1')) {
-            return Promise.resolve({ rows: [] });
+          if (sql.includes('SELECT client_id, is_active, expires_at FROM api_keys WHERE api_key = $1')) {
+            if (mockRegisteredApiKeys.has(key)) {
+              const entry = mockRegisteredApiKeys.get(key);
+              if (!entry.is_active) {
+                return Promise.resolve({ rows: [] });
+              }
+              return Promise.resolve({
+                rows: [{
+                  client_id: entry.client_id,
+                  is_active: entry.is_active,
+                  expires_at: entry.expires_at
+                }]
+              });
+            }
+          }
+
+          if (mockRegisteredApiKeys.has(key)) {
+            const entry = mockRegisteredApiKeys.get(key);
+            if (!entry.is_active) {
+              return Promise.resolve({ rows: [] });
+            }
+            return Promise.resolve({
+              rows: [entry]
+            });
           }
 
           // Recognized test keys
           if (key === 'test-key-123' || key === 'rate-limit-key') {
-            return Promise.resolve({ rows: [{ client_id: 'test.local', expires_at: null, is_active: true }] });
+            return Promise.resolve({
+              rows: [{
+                client_id: 'test.local',
+                expires_at: null,
+                is_active: true,
+                default_threshold: 18
+              }]
+            });
           }
           return Promise.resolve({ rows: [] });
-        }
-        // Handle INSERT into api_keys (for /api/v1/register tests or migration)
-        if (sql.includes('INSERT INTO api_keys')) {
-          return Promise.resolve({ rows: [{ api_key: params[1] }] });
         }
         // Handle migration check query (SELECT COUNT(*) ... WHERE created_by = 'migration')
         if (sql.includes('WHERE created_by')) {
@@ -173,8 +248,10 @@ jest.mock('prom-client', () => {
   };
 });
 
-// Force deterministic behavior
-jest.spyOn(Math, 'random').mockReturnValue(1);
+beforeEach(() => {
+  mockRegisteredClientIds.clear();
+  mockRegisteredApiKeys.clear();
+});
 
 // NOW require app AFTER mocks
 const { app, getServer } = require('../server');
@@ -484,6 +561,16 @@ describe('AgeGate as a Service - API Tests', () => {
     let insertAttempts = 0;
     let registeredKey = null;
     const mockQuery = jest.fn(async (sql, params) => {
+      if (sql.includes('is_active = false')) {
+        const revokedKey = params && params[0];
+        if (revokedKey && mockRegisteredApiKeys.has(revokedKey)) {
+          const entry = mockRegisteredApiKeys.get(revokedKey);
+          entry.is_active = false;
+          mockRegisteredApiKeys.set(revokedKey, entry);
+        }
+        return originalQuery.call(pool, sql, params);
+      }
+
       // Handle SELECT for the key we registered
       if (sql.includes('SELECT client_id FROM api_keys WHERE api_key = $1 AND is_active = true')) {
         if (params && params[0] === registeredKey) {
@@ -835,5 +922,53 @@ describe('AgeGate as a Service - API Tests', () => {
     const res = await request(app).get('/pricing').expect(200);
     expect(res.text).toContain('Free');
     expect(res.text).toContain('Pro');
+  });
+
+  test('GET /register returns registration form', async () => {
+    const res = await request(app).get('/register').expect(200);
+    expect(res.text).toContain('Get your API key');
+  });
+
+  test('POST /api/v1/register/public with valid data returns API key', async () => {
+    const csrfToken = await getCsrfToken();
+    const res = await agent
+      .post('/api/v1/register/public')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'self-test.com', email: 'test@example.com', description: 'test' })
+      .expect(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.api_key).toMatch(/^agk_[a-f0-9]{48}$/);
+  });
+
+  test('POST /api/v1/register/public rejects duplicate client_id', async () => {
+    const csrfToken = await getCsrfToken();
+    await agent
+      .post('/api/v1/register/public')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'duplicate.com', email: 'test@example.com' })
+      .expect(200);
+    const res2 = await agent
+      .post('/api/v1/register/public')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'duplicate.com', email: 'test2@example.com' })
+      .expect(409);
+    expect(res2.body.error).toContain('already registered');
+  });
+
+  test('Verification uses default_threshold when threshold not provided', async () => {
+    // Register a client with default_threshold = 21
+    const csrfToken = await getCsrfToken();
+    const reg = await agent
+      .post('/api/v1/register/public')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'default-threshold.com', email: 'test@example.com', threshold: 21 })
+      .expect(200);
+    const apiKey = reg.body.api_key;
+    const res = await request(app)
+      .post('/api/v1/verify')
+      .set('x-api-key', apiKey)
+      .send({ client_id: 'default-threshold.com' }) // no threshold
+      .expect(200);
+    expect(res.body.threshold).toBe(21);
   });
 });
