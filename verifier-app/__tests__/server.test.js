@@ -183,15 +183,17 @@ const { app, getServer } = require('../server');
 const agent = request.agent(app);
 
 beforeAll(async () => {
+  // Health check
   await agent.get('/health').expect(200);
 
   const loginPage = await agent.get('/login').expect(200);
-  const loginCsrf = loginPage.text.match(/name="_csrf" value="([^"]+)"/);
-  expect(loginCsrf).not.toBeNull();
+  const loginCsrfMatch = loginPage.text.match(/name="_csrf" value="([^"]+)"/);
+  expect(loginCsrfMatch).not.toBeNull();
+  const loginCsrf = loginCsrfMatch[1];
 
   await agent
     .post('/login')
-    .set('CSRF-Token', loginCsrf[1])
+    .set('CSRF-Token', loginCsrf)
     .send({ user: ADMIN_USER, pass: ADMIN_PASS })
     .expect(302);
 });
@@ -247,29 +249,25 @@ describe('AgeGate as a Service - API Tests', () => {
   });
 
   test('POST /login regenerates the session id', async () => {
-    const loginPage = await request(app).get('/login').expect(200);
+    const loginPage = await agent.get('/login').expect(200);
     const csrfMatch = loginPage.text.match(/name="_csrf" value="([^"]+)"/);
     expect(csrfMatch).not.toBeNull();
+    const csrfToken = csrfMatch[1];
 
-    const initialCookie = (loginPage.headers['set-cookie'] || [])
-      .find(c => c.startsWith('agegate.sid='));
-
-    const loginReq = request(app)
+    const loginRes = await agent
       .post('/login')
-      .set('CSRF-Token', csrfMatch[1])
-      .send({ user: ADMIN_USER, pass: ADMIN_PASS });
+      .set('CSRF-Token', csrfToken)
+      .send({ user: ADMIN_USER, pass: ADMIN_PASS })
+      .expect(302);
 
-    if (initialCookie) {
-      loginReq.set('Cookie', initialCookie.split(';')[0]);
-    }
-
-    const loginRes = await loginReq.expect(302);
-    expect(loginRes.headers.location).toBe('/dashboard');
+    expect(loginRes.headers.location || loginRes.headers.Location).toBe('/dashboard');
 
     const newCookie = (loginRes.headers['set-cookie'] || [])
       .find(c => c.startsWith('agegate.sid='));
     expect(newCookie).toBeDefined();
 
+    const initialCookie = (loginPage.headers['set-cookie'] || [])
+      .find(c => c.startsWith('agegate.sid='));
     if (initialCookie) {
       expect(newCookie.split(';')[0]).not.toBe(initialCookie.split(';')[0]);
     }

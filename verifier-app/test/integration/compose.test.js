@@ -62,11 +62,12 @@ beforeAll(async () => {
   await waitOn({ resources: [`http-get://localhost:8082/ready`], timeout: 30000 });
 
   const loginPage = await agent.get('/login').expect(200);
-  const loginCsrf = loginPage.text.match(/name="_csrf" value="([^"]+)"/);
-  expect(loginCsrf).not.toBeNull();
+  const loginCsrfMatch = loginPage.text.match(/name="_csrf" value="([^"]+)"/);
+  expect(loginCsrfMatch).not.toBeNull();
+  const loginCsrf = loginCsrfMatch[1];
   await agent
     .post('/login')
-    .set('CSRF-Token', loginCsrf[1])
+    .set('CSRF-Token', loginCsrf)
     .send({ user: 'admin', pass: 'admin123' })
     .expect(302);
 }, 60000);
