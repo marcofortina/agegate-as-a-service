@@ -824,4 +824,16 @@ describe('AgeGate as a Service - API Tests', () => {
       .expect(200);
     // For unit test, we trust the mock; no further check needed
   });
+
+  test('GET / returns landing page', async () => {
+    const res = await request(app).get('/').expect(200);
+    expect(res.text).toContain('Age Gate as a Service');
+    expect(res.text).toContain('EU Blueprint compliant');
+  });
+
+  test('GET /pricing returns pricing page', async () => {
+    const res = await request(app).get('/pricing').expect(200);
+    expect(res.text).toContain('Free');
+    expect(res.text).toContain('Pro');
+  });
 });

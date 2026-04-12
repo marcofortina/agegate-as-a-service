@@ -2100,6 +2100,94 @@ app.get('/onboarding', (req, res) => {
   `);
 });
 
+// Public landing page
+app.get('/', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Age Gate as a Service – EU Blueprint age verification</title>
+      <style>
+        body { font-family: system-ui, sans-serif; background: #111; color: #0f0; margin: 0; padding: 0; line-height: 1.5; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .hero { text-align: center; padding: 60px 20px; }
+        .hero h1 { font-size: 3rem; margin-bottom: 20px; }
+        .hero p { font-size: 1.2rem; color: #aaa; max-width: 700px; margin: 0 auto; }
+        .btn { display: inline-block; background: #0f0; color: #111; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 20px; }
+        .features { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; margin: 60px 0; }
+        .feature-card { background: #222; padding: 20px; border-radius: 12px; width: 280px; text-align: center; }
+        .feature-card h3 { margin-top: 0; }
+        .footer { text-align: center; padding: 40px; border-top: 1px solid #333; margin-top: 60px; color: #666; }
+        a { color: #0f0; text-decoration: none; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="hero">
+          <h1>⚡ Age Gate as a Service</h1>
+          <p>EU Blueprint compliant age verification with double anonymity. Protect your content while respecting user privacy.</p>
+          <a href="/pricing" class="btn">Get started →</a>
+        </div>
+        <div class="features">
+          <div class="feature-card"><h3>🔒 Double anonymity</h3><p>IPs are hashed with daily rotating salt – never stored.</p></div>
+          <div class="feature-card"><h3>📊 Real‑time analytics</h3><p>Client dashboard with charts and usage stats.</p></div>
+          <div class="feature-card"><h3>🔔 Webhook support</h3><p>Async notifications on every verification.</p></div>
+          <div class="feature-card"><h3>📄 AGCOM export</h3><p>One‑click compliance report (CSV/PDF).</p></div>
+          <div class="feature-card"><h3>🚀 High scalability</h3><p>Built on K3s, Redis, TimescaleDB – ready for production.</p></div>
+          <div class="feature-card"><h3>🛡️ EU Blueprint ready</h3><p>Follows ageverification.dev guidelines.</p></div>
+        </div>
+        <div class="footer">
+          <p>© 2026 Age Gate as a Service | <a href="/pricing">Pricing</a> | <a href="/api-docs">API Docs</a> | <a href="/login">Admin login</a></p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+// Pricing page
+app.get('/pricing', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Pricing – Age Gate as a Service</title>
+      <style>
+        body { font-family: system-ui, sans-serif; background: #111; color: #0f0; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 40px; }
+        .pricing-grid { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
+        .plan { background: #222; border-radius: 16px; padding: 30px; width: 280px; text-align: center; }
+        .plan h2 { margin-top: 0; }
+        .price { font-size: 2rem; font-weight: bold; margin: 20px 0; }
+        .features-list { list-style: none; padding: 0; text-align: left; margin: 20px 0; }
+        .features-list li { margin: 10px 0; }
+        .btn { display: inline-block; background: #0f0; color: #111; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-weight: bold; }
+        .footer { text-align: center; margin-top: 60px; color: #666; }
+        a { color: #0f0; text-decoration: none; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>Simple, transparent pricing</h1>
+        <div class="pricing-grid">
+          <div class="plan"><h2>Free</h2><div class="price">€0 / month</div><ul class="features-list"><li>✅ 100 req/min</li><li>✅ 1,000 verifications/day</li><li>✅ Self‑service dashboard</li><li>❌ Webhooks</li><li>❌ AGCOM export</li></ul><a href="/register" class="btn">Get started</a></div>
+          <div class="plan"><h2>Pro</h2><div class="price">€49 / month</div><ul class="features-list"><li>✅ 1,000 req/min</li><li>✅ 10,000 verifications/day</li><li>✅ Self‑service dashboard</li><li>✅ Webhooks</li><li>✅ AGCOM export</li><li>✅ Priority support</li></ul><a href="/register" class="btn">Choose plan</a></div>
+          <div class="plan"><h2>Enterprise</h2><div class="price">Custom</div><ul class="features-list"><li>✅ Unlimited requests</li><li>✅ Custom rate limits</li><li>✅ White‑label branding</li><li>✅ SLA & dedicated support</li><li>✅ On‑premise deployment</li></ul><a href="/register" class="btn">Contact us</a></div>
+        </div>
+        <div class="footer">
+          <p><a href="/">← Back to home</a> | <a href="/api-docs">API Docs</a> | <a href="/login">Admin login</a></p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
 // ==================== SERVER START + GRACEFUL SHUTDOWN ====================
 let server;
 

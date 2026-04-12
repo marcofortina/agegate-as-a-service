@@ -454,4 +454,14 @@ describe('Integration Tests with docker-compose', () => {
     expect(res.body.logo_url).toBe('https://example.com/integration-logo.png');
     expect(res.body.primary_color).toBe('#123456');
   });
+
+  test('Public landing page is accessible', async () => {
+    const res = await request(baseUrl).get('/').expect(200);
+    expect(res.text).toContain('Age Gate as a Service');
+  });
+
+  test('Pricing page is accessible', async () => {
+    const res = await request(baseUrl).get('/pricing').expect(200);
+    expect(res.text).toContain('Pro');
+  });
 });

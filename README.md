@@ -1,5 +1,7 @@
 [![CI](https://github.com/marcofortina/agegate-as-a-service/actions/workflows/ci.yml/badge.svg)](https://github.com/marcofortina/agegate-as-a-service/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Landing Page](https://img.shields.io/badge/🌐-Landing%20Page-brightgreen)](https://agegate.local/)
+[![Pricing](https://img.shields.io/badge/💰-Pricing-blue)](https://agegate.local/pricing)
 [![codecov](https://codecov.io/github/marcofortina/agegate-as-a-service/graph/badge.svg?token=YP4U4MW6J2)](https://codecov.io/github/marcofortina/agegate-as-a-service)
 
 # Age Gate as a Service
