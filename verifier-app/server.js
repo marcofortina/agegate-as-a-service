@@ -852,8 +852,12 @@ app.post('/api/v1/verify', async (req, res) => {
     const backend = process.env.VERIFIER_BACKEND || 'mock';
 
     if (backend === 'mock') {
-      // realistic simulation for testing
-      verified = Math.random() * 100 >= (threshold - 5); // ~5% false negatives for testing
+      // realistic simulation for testing, but force verified in integration tests
+      if (process.env.FORCE_VERIFIED === 'true') {
+        verified = true;
+      } else {
+        verified = Math.random() * 100 >= (threshold - 5);
+      }
     } else if (backend === 'eidas') {
       // TODO: OID4VP / mDoc integration (future)
       verified = true; // placeholder

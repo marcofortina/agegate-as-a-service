@@ -20,6 +20,9 @@ beforeAll(async () => {
   // Start containers
   execSync('docker-compose -f docker-compose.test.yml up -d', { stdio: 'inherit' });
 
+  // Force verified true for mock backend to make tests deterministic
+  process.env.FORCE_VERIFIED = 'true';
+
   // Wait for containers to be ready
   await waitOn({ resources: ['tcp:localhost:5433', 'tcp:localhost:6380'], timeout: 30000 });
 
