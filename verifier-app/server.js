@@ -1462,6 +1462,45 @@ app.get('/dashboard', async (req, res) => {
   </script>
 
   <div class="card">
+    <h2>All Client Brandings</h2>
+    <table id="brandingTable">
+      <thead>
+        <tr><th>Client ID</th><th>Logo URL</th><th>Primary Color</th><th>Secondary Color</th><th>Actions</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    async function loadBrandingList() {
+      const response = await fetch('/api/v1/branding', {
+        headers: { 'CSRF-Token': window.csrfToken }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const tbody = document.querySelector('#brandingTable tbody');
+        tbody.innerHTML = '';
+        for (const b of data.branding) {
+          const row = tbody.insertRow();
+          row.insertCell(0).innerText = b.client_id;
+          row.insertCell(1).innerText = b.logo_url || '-';
+          row.insertCell(2).innerHTML = '<span style="background:' + b.primary_color + '; padding:2px 8px; border-radius:4px; color:#000;">' + b.primary_color + '</span>';
+          row.insertCell(3).innerHTML = '<span style="background:' + b.secondary_color + '; padding:2px 8px; border-radius:4px; color:#000;">' + b.secondary_color + '</span>';
+          const actionsCell = row.insertCell(4);
+          const editBtn = document.createElement('button');
+          editBtn.innerText = 'Edit';
+          editBtn.onclick = () => loadBrandingForEdit(b.client_id);
+          const deleteBtn = document.createElement('button');
+          deleteBtn.innerText = 'Delete';
+          deleteBtn.onclick = () => deleteBranding(b.client_id);
+          actionsCell.appendChild(editBtn);
+          actionsCell.appendChild(deleteBtn);
+        }
+      }
+    }
+  </script>
+
+  <div class="card">
     <h2>Client Branding (White‑Label)</h2>
     <label>Client ID:</label>
     <select id="brandingClientId">
@@ -1522,6 +1561,46 @@ app.get('/dashboard', async (req, res) => {
       if (response.ok) alert('Branding saved');
       else alert('Failed to save branding');
     }
+
+    async function loadBrandingForEdit(clientId) {
+      const response = await fetch('/api/v1/branding/admin/' + clientId, {
+        headers: { 'CSRF-Token': window.csrfToken }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        document.getElementById('brandingClientId').value = data.client_id;
+        document.getElementById('logoUrl').value = data.logo_url || '';
+        document.getElementById('primaryColor').value = data.primary_color || '#0f0';
+        document.getElementById('secondaryColor').value = data.secondary_color || '#222';
+        document.getElementById('customDomain').value = data.custom_domain || '';
+        document.getElementById('footerText').value = data.footer_text || '';
+        document.getElementById('brandingForm').style.display = 'block';
+        const select = document.getElementById('brandingClientId');
+        select.value = data.client_id;
+      } else {
+        alert('Failed to load branding');
+      }
+    }
+
+    async function deleteBranding(clientId) {
+      if (!confirm('Delete branding for ' + clientId + '?')) return;
+      const response = await fetch('/api/v1/branding/' + clientId, {
+        method: 'DELETE',
+        headers: { 'CSRF-Token': window.csrfToken }
+      });
+      if (response.ok) {
+       alert('Branding deleted');
+        loadBrandingList();
+        if (document.getElementById('brandingClientId').value === clientId) {
+          document.getElementById('brandingForm').style.display = 'none';
+        }
+      } else {
+        alert('Failed to delete branding');
+      }
+    }
+
+    // Load branding list when dashboard loads
+    loadBrandingList();
   </script>
 
   <a href="/logout">Logout</a>
@@ -1894,7 +1973,18 @@ app.get('/api/v1/keys/:client_id', async (req, res) => {
   });
 });
 
-// Admin endpoint to update client branding
+// GET /api/v1/branding - List all client brandings (admin only)
+app.get('/api/v1/branding', async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const result = await pool.query(`
+    SELECT client_id, logo_url, primary_color, secondary_color, custom_domain, footer_text
+    FROM client_branding
+    ORDER BY client_id
+  `);
+  res.json({ branding: result.rows });
+});
+
+// Admin endpoint to create or update client branding
 app.post('/api/v1/branding', doubleCsrfProtection, async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { client_id, logo_url, primary_color, secondary_color, custom_domain, footer_text } = req.body;
@@ -1925,7 +2015,17 @@ app.post('/api/v1/branding', doubleCsrfProtection, async (req, res) => {
   res.json({ success: true, client_id });
 });
 
-// Admin endpoint to get branding for a client
+// DELETE /api/v1/branding/:client_id - Remove branding for a client (admin only)
+app.delete('/api/v1/branding/:client_id', doubleCsrfProtection, async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { client_id } = req.params;
+  await pool.query('DELETE FROM client_branding WHERE client_id = $1', [client_id]);
+  const adminUser = getAdminUser(req);
+  await logAdminAction(adminUser, 'DELETE_BRANDING', client_id, {});
+  res.json({ success: true, client_id });
+});
+
+// Admin endpoint to get branding for a single client (for editing)
 app.get('/api/v1/branding/admin/:client_id', async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
   const { client_id } = req.params;

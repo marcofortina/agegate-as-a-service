@@ -411,6 +411,23 @@ describe('Integration Tests with docker-compose', () => {
     expect(res2.body.verified).toBeDefined();
   });
 
+  test('Admin can list all brandings', async () => {
+    const csrfToken = await getCsrfToken();
+    const res = await agent
+      .get('/api/v1/branding')
+      .set('CSRF-Token', csrfToken)
+      .expect(200);
+    expect(Array.isArray(res.body.branding)).toBe(true);
+  });
+
+  test('Admin can delete a branding', async () => {
+    const csrfToken = await getCsrfToken();
+    await agent
+      .delete('/api/v1/branding/branding-integration-test')
+      .set('CSRF-Token', csrfToken)
+      .expect(200);
+  });
+
   test('Client branding is applied after admin update', async () => {
     const csrfToken = await getCsrfToken();
     // Register a client

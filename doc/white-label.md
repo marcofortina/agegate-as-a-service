@@ -20,6 +20,24 @@ Returns the branding settings for a given `client_id`. No authentication require
 }
 ```
 
+## Admin Endpoints
+
+### `GET /api/v1/branding`
+
+Lists all client brandings.
+
+### `POST /api/v1/branding`
+
+Creates or updates a branding for a client. Expects client_id, logo_url, primary_color, secondary_color, custom_domain, footer_text in JSON body.
+
+### `DELETE /api/v1/branding/:client_id`
+
+Removes the branding for the specified client.
+
+### `GET /api/v1/branding/admin/:client_id`
+
+Retrieves the branding for a single client (for editing).
+
 ## Admin Dashboard
 
 In the admin dashboard, under the **Client Branding** card, you can select a client and customise:
@@ -28,6 +46,8 @@ In the admin dashboard, under the **Client Branding** card, you can select a cli
 - Modal background color (hex)
 - Custom domain (for future use)
 - Footer text
+
+Additionally, a table lists all existing brandings with Edit and Delete buttons.
 
 ## SDK Integration
 
