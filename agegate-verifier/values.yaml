@@ -72,6 +72,10 @@ env:
   SMTP_USER: ""
   SMTP_PASS: ""
   FROM_EMAIL: "noreply@agegate.local"
+  # Stripe (for subscription billing)
+  STRIPE_SECRET_KEY: ""
+  STRIPE_WEBHOOK_SECRET: ""
+  STRIPE_PRICE_PRO_MONTHLY: "price_pro_monthly"
 
 # Subcharts
 redis: {}

@@ -18,6 +18,7 @@ const app = express();
 const helmet = require('helmet');
 const cors = require('cors');
 const { z } = require('zod');
+const Stripe = require('stripe');
 const nodemailer = require('nodemailer');
 const { doubleCsrf } = require('csrf-csrf');
 
@@ -39,6 +40,10 @@ const emailTransporter = process.env.SMTP_HOST ? nodemailer.createTransport({
   auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
 }) : null;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@agegate.local';
+const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2025-02-24.acacia',
+}) : null;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
 // Apply IP anonymization BEFORE any logging or rate limiting
 const anonymizeIP = process.env.ANONYMIZE_IP !== 'false'; // Enabled by default
@@ -472,6 +477,7 @@ async function initDB() {
       description TEXT,
       daily_limit INTEGER DEFAULT NULL,
       is_active BOOLEAN DEFAULT true,
+      stripe_customer_id TEXT,
       default_threshold INTEGER DEFAULT 18,
       created_by TEXT
     );
@@ -524,6 +530,46 @@ async function initDB() {
       footer_text TEXT
     );
   `);
+
+  // Plans table for subscription tiers
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS plans (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      stripe_price_id TEXT UNIQUE,
+      rate_limit INTEGER NOT NULL,
+      daily_limit INTEGER NOT NULL,
+      price_cents INTEGER NOT NULL,
+      interval TEXT CHECK (interval IN ('month', 'year')),
+      features JSONB
+    );
+  `);
+
+  // Subscriptions table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id SERIAL PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      stripe_subscription_id TEXT UNIQUE NOT NULL,
+      plan_id INTEGER NOT NULL REFERENCES plans(id),
+      status TEXT NOT NULL,
+      current_period_end TIMESTAMPTZ NOT NULL,
+      cancel_at_period_end BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // Insert default plans if not exists
+  const proPriceId = process.env.STRIPE_PRICE_PRO_MONTHLY || 'price_pro_monthly';
+  await pool.query(`
+    INSERT INTO plans (name, stripe_price_id, rate_limit, daily_limit, price_cents, interval, features)
+    VALUES
+      ('Free', NULL, 100, 1000, 0, 'month', '{"webhooks": false, "agcom_export": false, "white_label": false}'),
+      ('Pro', $1, 1000, 10000, 4900, 'month', '{"webhooks": true, "agcom_export": true, "white_label": false}'),
+      ('Enterprise', NULL, 10000, 100000, 0, 'month', '{"webhooks": true, "agcom_export": true, "white_label": true}')
+    ON CONFLICT (stripe_price_id) DO NOTHING;
+  `, [proPriceId]);
 
   // Set retention policy (default: 30 days)
   const retentionDays = parseInt(process.env.RETENTION_DAYS || '30');
@@ -1064,6 +1110,11 @@ app.get('/api/v1/client/dashboard', async (req, res) => {
   <div class="card"><h2>Verifications by Threshold</h2><div class="chart-container"><canvas id="thresholdChart"></canvas></div></div>
   <div class="card"><h2>Weekly Verifications (last 12 weeks)</h2><div class="chart-container"><canvas id="weeklyChart"></canvas></div></div>
   <div class="card">
+    <h2>Your Subscription Plan</h2>
+    <div id="subscriptionInfo">Loading...</div>
+    <div id="upgradeButton"></div>
+  </div>
+  <div class="card">
     <h2>Manage Your API Key</h2>
     <button onclick="rotateKey()">Rotate API Key</button>
     <button onclick="updateDescription()">Update Description</button>
@@ -1151,7 +1202,60 @@ app.get('/api/v1/client/dashboard', async (req, res) => {
         alert('Update failed');
       }
     }
+
+    async function loadSubscription() {
+      try {
+        const response = await fetch('/api/v1/client/subscription', {
+          headers: { 'x-api-key': '${apiKey}' }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          let infoHtml = '<p>Plan: <strong>' + data.plan_name + '</strong></p>' +
+                         '<p>Rate limit: ' + data.rate_limit + ' req/min</p>' +
+                         '<p>Daily limit: ' + data.daily_limit + ' verifications/day</p>';
+          if (data.status === 'active') {
+            infoHtml += '<p>Next billing: ' + new Date(data.current_period_end).toLocaleDateString() + '</p>';
+          }
+          document.getElementById('subscriptionInfo').innerHTML = infoHtml;
+          const upgradeDiv = document.getElementById('upgradeButton');
+          if (data.plan_name === 'Free') {
+            upgradeDiv.innerHTML = '<button onclick="upgradePlan()">Upgrade to Pro</button>';
+          } else if (data.portal_url) {
+            upgradeDiv.innerHTML = '<a href="' + data.portal_url + '" target="_blank" class="btn">Manage subscription</a>';
+          }
+        } else {
+          document.getElementById('subscriptionInfo').innerText = 'Unable to load subscription details.';
+        }
+      } catch (err) {
+        console.error('Failed to load subscription:', err);
+      }
+    }
+
+    async function upgradePlan() {
+      const plansRes = await fetch('/api/v1/plans');
+      const plans = await plansRes.json();
+      const proPlan = plans.find(p => p.name === 'Pro');
+      if (!proPlan || !proPlan.stripe_price_id) {
+        alert('Pro plan not configured');
+        return;
+      }
+      const response = await fetch('/api/v1/stripe/create-checkout-session', {
+        method: 'POST',
+        headers: { 'x-api-key': '${apiKey}', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          priceId: proPlan.stripe_price_id,
+          successUrl: window.location.href,
+          cancelUrl: window.location.href
+        })
+      });
+      const data = await response.json();
+      if (data.url) window.location.href = data.url;
+      else alert('Failed to create checkout session');
+    }
+
+    // Call loadSubscription after loadDescription
     loadDescription();
+    loadSubscription();
   </script>
 </body>
 </html>`;
@@ -2312,6 +2416,190 @@ app.get('/pricing', (req, res) => {
     </body>
     </html>
   `);
+});
+
+// GET /api/v1/plans - List available plans (public)
+app.get('/api/v1/plans', async (req, res) => {
+  const plans = await pool.query('SELECT id, name, price_cents, interval, features FROM plans WHERE stripe_price_id IS NOT NULL OR name = $1', ['Free']);
+  res.json(plans.rows);
+});
+
+// GET /api/v1/client/subscription - Get current subscription details for the client
+app.get('/api/v1/client/subscription', async (req, res) => {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey) return res.status(401).json({ error: 'Missing API key' });
+  const keyCheck = await pool.query('SELECT client_id FROM api_keys WHERE api_key = $1', [apiKey]);
+  if (keyCheck.rows.length === 0) return res.status(401).json({ error: 'Invalid API key' });
+  const clientId = keyCheck.rows[0].client_id;
+  const subRes = await pool.query(`
+    SELECT s.status, s.current_period_end, p.name as plan_name, p.rate_limit, p.daily_limit
+    FROM subscriptions s
+    JOIN plans p ON s.plan_id = p.id
+    WHERE s.client_id = $1 AND s.status = 'active'
+    ORDER BY s.created_at DESC LIMIT 1
+  `, [clientId]);
+  if (subRes.rows.length === 0) {
+    // Fallback to free plan
+    const freePlan = await pool.query('SELECT name, rate_limit, daily_limit FROM plans WHERE name = $1', ['Free']);
+    return res.json({
+      plan_name: freePlan.rows[0].name,
+      rate_limit: freePlan.rows[0].rate_limit,
+      daily_limit: freePlan.rows[0].daily_limit,
+      status: 'free',
+    });
+  }
+  // Generate Stripe customer portal URL
+  const stripeCustomer = await pool.query('SELECT stripe_customer_id FROM api_keys WHERE client_id = $1', [clientId]);
+  let portalUrl = null;
+  if (stripe && stripeCustomer.rows[0]?.stripe_customer_id) {
+    try {
+      const session = await stripe.billingPortal.sessions.create({
+        customer: stripeCustomer.rows[0].stripe_customer_id,
+        return_url: `${PUBLIC_URL}/api/v1/client/dashboard`,
+      });
+      portalUrl = session.url;
+    } catch (err) {
+      logger.error({ err }, 'Failed to create Stripe portal session');
+    }
+  }
+  res.json({
+    plan_name: subRes.rows[0].plan_name,
+    rate_limit: subRes.rows[0].rate_limit,
+    daily_limit: subRes.rows[0].daily_limit,
+    status: subRes.rows[0].status,
+    current_period_end: subRes.rows[0].current_period_end,
+    portal_url: portalUrl,
+  });
+});
+
+// Stripe Checkout session (client authenticated via API key)
+app.post('/api/v1/stripe/create-checkout-session', async (req, res) => {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey) {
+    return res.status(401).json({ error: 'Missing API key' });
+  }
+  const keyCheck = await pool.query(
+    `SELECT client_id FROM api_keys WHERE api_key = $1 AND is_active = true`,
+    [apiKey]
+  );
+  if (keyCheck.rows.length === 0) {
+    return res.status(401).json({ error: 'Invalid API key' });
+  }
+  const clientId = keyCheck.rows[0].client_id;
+  const { priceId, successUrl, cancelUrl } = req.body;
+  if (!priceId || !successUrl || !cancelUrl) {
+    return res.status(400).json({ error: 'priceId, successUrl and cancelUrl are required' });
+  }
+  if (!stripe) {
+    return res.status(500).json({ error: 'Stripe not configured' });
+  }
+  try {
+    // Get or create Stripe customer for this client
+    let customerId = null;
+    const custRes = await pool.query('SELECT stripe_customer_id FROM api_keys WHERE api_key = $1', [apiKey]);
+    if (custRes.rows[0]?.stripe_customer_id) {
+      customerId = custRes.rows[0].stripe_customer_id;
+    } else {
+      const customer = await stripe.customers.create({
+        metadata: { client_id: clientId },
+      });
+      customerId = customer.id;
+      await pool.query('UPDATE api_keys SET stripe_customer_id = $1 WHERE api_key = $2', [customerId, apiKey]);
+    }
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      payment_method_types: ['card'],
+      line_items: [{ price: priceId, quantity: 1 }],
+      mode: 'subscription',
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      metadata: { client_id: clientId, api_key: apiKey },
+    });
+    res.json({ sessionId: session.id, url: session.url });
+  } catch (err) {
+    logger.error({ err }, 'Stripe checkout error');
+    res.status(500).json({ error: 'Failed to create checkout session' });
+  }
+});
+
+// Stripe webhook endpoint (public, verifies signature)
+app.post('/api/v1/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+  if (!stripe || !STRIPE_WEBHOOK_SECRET) {
+    return res.status(500).send('Stripe not configured');
+  }
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    logger.error({ err }, 'Webhook signature verification failed');
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  switch (event.type) {
+    case 'checkout.session.completed': {
+      const session = event.data.object;
+      const clientId = session.metadata.client_id;
+      const apiKey = session.metadata.api_key;
+      const subscriptionId = session.subscription;
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+      const priceId = subscription.items.data[0].price.id;
+      const planRes = await pool.query('SELECT id, rate_limit, daily_limit FROM plans WHERE stripe_price_id = $1', [priceId]);
+      if (planRes.rows.length === 0) {
+        logger.error({ priceId }, 'No plan found for price');
+        break;
+      }
+      const plan = planRes.rows[0];
+      await pool.query(
+        `UPDATE api_keys SET rate_limit = $1, daily_limit = $2 WHERE api_key = $3`,
+        [plan.rate_limit, plan.daily_limit, apiKey]
+      );
+      await pool.query(
+        `INSERT INTO subscriptions (client_id, stripe_subscription_id, plan_id, status, current_period_end)
+         VALUES ($1, $2, $3, $4, to_timestamp($5))`,
+        [clientId, subscriptionId, plan.id, subscription.status, subscription.current_period_end]
+      );
+      break;
+    }
+    case 'customer.subscription.updated': {
+      const subscription = event.data.object;
+      const subscriptionId = subscription.id;
+      const status = subscription.status;
+      const currentPeriodEnd = subscription.current_period_end;
+      const subRes = await pool.query('SELECT plan_id, client_id FROM subscriptions WHERE stripe_subscription_id = $1', [subscriptionId]);
+      if (subRes.rows.length === 0) break;
+      const { plan_id, client_id } = subRes.rows[0];
+      const planRes = await pool.query('SELECT rate_limit, daily_limit FROM plans WHERE id = $1', [plan_id]);
+      const plan = planRes.rows[0];
+      await pool.query(
+        `UPDATE api_keys SET rate_limit = $1, daily_limit = $2 WHERE client_id = $3`,
+        [plan.rate_limit, plan.daily_limit, client_id]
+      );
+      await pool.query(
+        `UPDATE subscriptions SET status = $1, current_period_end = to_timestamp($2), updated_at = NOW()
+         WHERE stripe_subscription_id = $3`,
+        [status, currentPeriodEnd, subscriptionId]
+      );
+      break;
+    }
+    case 'customer.subscription.deleted': {
+      const subscription = event.data.object;
+      const subscriptionId = subscription.id;
+      const freePlan = await pool.query('SELECT rate_limit, daily_limit FROM plans WHERE name = $1', ['Free']);
+      if (freePlan.rows.length > 0) {
+        const subRes = await pool.query('SELECT client_id FROM subscriptions WHERE stripe_subscription_id = $1', [subscriptionId]);
+        if (subRes.rows.length > 0) {
+          await pool.query(
+            `UPDATE api_keys SET rate_limit = $1, daily_limit = $2 WHERE client_id = $3`,
+            [freePlan.rows[0].rate_limit, freePlan.rows[0].daily_limit, subRes.rows[0].client_id]
+          );
+        }
+      }
+      await pool.query('UPDATE subscriptions SET status = $1 WHERE stripe_subscription_id = $2', ['canceled', subscriptionId]);
+      break;
+    }
+  }
+  res.json({ received: true });
 });
 
 // ==================== SERVER START + GRACEFUL SHUTDOWN ====================

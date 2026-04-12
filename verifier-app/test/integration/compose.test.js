@@ -496,4 +496,45 @@ describe('Integration Tests with docker-compose', () => {
       .expect(200);
     expect(verifyRes.body.threshold).toBe(21);
   });
+
+  let stripeApiKey;
+  beforeAll(async () => {
+    const csrfToken = await getCsrfToken();
+    const reg = await agent
+      .post('/api/v1/register/public')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'stripe-integration.com', email: 'stripe@test.com' })
+      .expect(200);
+    stripeApiKey = reg.body.api_key;
+  });
+
+  test('Plans endpoint lists available subscription plans', async () => {
+    const res = await request(baseUrl).get('/api/v1/plans').expect(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    const planNames = res.body.map(p => p.name);
+    expect(planNames).toContain('Free');
+    expect(planNames).toContain('Pro');
+  });
+
+  test('Newly registered client has free subscription plan', async () => {
+     const res = await request(baseUrl)
+       .get('/api/v1/client/subscription')
+       .set('x-api-key', stripeApiKey)
+       .expect(200);
+     expect(res.body.plan_name).toBe('Free');
+  });
+
+  test('Checkout session creation rejects requests without API key', async () => {
+    await request(baseUrl)
+      .post('/api/v1/stripe/create-checkout-session')
+      .expect(401);
+  });
+
+  test('Client dashboard shows subscription plan section', async () => {
+    const res = await request(baseUrl)
+      .get('/api/v1/client/dashboard')
+      .set('x-api-key', stripeApiKey)
+      .expect(200);
+    expect(res.text).toContain('Your Subscription Plan');
+  });
 });

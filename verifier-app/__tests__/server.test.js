@@ -205,6 +205,14 @@ jest.mock('pg', () => {
         if (sql.includes('SELECT api_key, created_at, expires_at, last_used_at, is_active, created_by, description FROM api_keys WHERE client_id = $1')) {
           return Promise.resolve({ rows: [{ api_key: 'test-key-123', created_at: new Date(), expires_at: null, last_used_at: null, is_active: true, created_by: 'admin', description: 'Test key' }] });
         }
+        // Handle plans table queries
+        if (sql.includes('FROM plans')) {
+          // Return mock plans for any query on plans table
+          return Promise.resolve({ rows: [
+            { id: 1, name: 'Free', price_cents: 0, interval: 'month', features: {} },
+            { id: 2, name: 'Pro', price_cents: 4900, interval: 'month', features: {} }
+          ] });
+        }
         // Handle UPDATE rate_limit
         if (sql.includes('UPDATE api_keys SET rate_limit = $1 WHERE api_key = $2 RETURNING client_id')) {
           return Promise.resolve({ rows: [{ client_id: 'rate-test' }] });
@@ -970,5 +978,33 @@ describe('AgeGate as a Service - API Tests', () => {
       .send({ client_id: 'default-threshold.com' }) // no threshold
       .expect(200);
     expect(res.body.threshold).toBe(21);
+  });
+
+  test('GET /api/v1/plans returns list of plans', async () => {
+    const res = await request(app).get('/api/v1/plans').expect(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBeGreaterThan(0);
+  });
+
+  test('GET /api/v1/client/subscription returns subscription info for valid API key', async () => {
+    // Use the existing test key which is already mocked in api_keys
+    const apiKey = 'test-key-123';
+    const res = await request(app)
+      .get('/api/v1/client/subscription')
+      .set('x-api-key', apiKey)
+      .expect(200);
+    expect(res.body.plan_name).toBe('Free');
+  });
+
+  test('GET /api/v1/client/subscription returns 401 without API key', async () => {
+    await request(app)
+      .get('/api/v1/client/subscription')
+      .expect(401);
+  });
+
+  test('POST /api/v1/stripe/create-checkout-session requires API key', async () => {
+    await request(app)
+      .post('/api/v1/stripe/create-checkout-session')
+      .expect(401);
   });
 });
