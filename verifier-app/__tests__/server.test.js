@@ -1035,4 +1035,42 @@ describe('AgeGate as a Service - API Tests', () => {
     // Restore original query
     pool.query = originalQuery;
   });
+
+  test('POST /api/v1/verify returns rate limit headers', async () => {
+    const { pool } = require('../server');
+    const originalQuery = pool.query;
+    // Mock rate limit and daily limit values
+    pool.query = jest.fn().mockImplementation((sql) => {
+      if (sql.includes('SELECT rate_limit, daily_limit')) {
+        return Promise.resolve({ rows: [{ rate_limit: 200, daily_limit: 5000 }] });
+      }
+      if (sql.includes('SELECT client_id, expires_at, is_active, default_threshold')) {
+        return Promise.resolve({ rows: [{ client_id: 'test.local', expires_at: null, is_active: true, default_threshold: 18 }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+
+    const Redis = require('ioredis');
+    // Mock Redis to return 75 requests so far (remaining = 125)
+    Redis.__mockInstance.multi.mockReturnValue({
+      incr: jest.fn(),
+      ttl: jest.fn(),
+      exec: jest.fn().mockResolvedValue([[null, 75], [null, 30]])
+    });
+    Redis.__mockInstance.get.mockResolvedValue('2500'); // daily count
+
+    const res = await request(app)
+      .post('/api/v1/verify')
+      .set('x-api-key', 'test-key-123')
+      .send({ client_id: 'test.local', threshold: 18 });
+    expect(res.status).toBe(200);
+    expect(res.headers['x-ratelimit-limit']).toBe('200');
+    expect(res.headers['x-ratelimit-remaining']).toBe('125');
+    expect(res.headers['x-ratelimit-reset']).toBeDefined();
+    expect(res.headers['x-dailylimit-limit']).toBe('5000');
+    expect(res.headers['x-dailylimit-remaining']).toBe('2500');
+    expect(res.headers['x-dailylimit-reset']).toBeDefined();
+
+    pool.query = originalQuery;
+  });
 });

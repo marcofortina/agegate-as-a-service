@@ -37,6 +37,14 @@ Response (failure – underage or invalid key):
 }
 ```
 
+### Rate Limit Headers
+
+Every response from `/api/v1/verify` includes the following HTTP headers:
+- `X-RateLimit-Limit` – maximum requests per minute for this API key
+- `X-RateLimit-Remaining` – remaining requests in the current minute window
+- `X-RateLimit-Reset` – timestamp (Unix seconds) when the limit resets
+- If a daily limit is configured, additional headers `X-DailyLimit-Limit`, `X-DailyLimit-Remaining`, and `X-DailyLimit-Reset` are also returned.
+
 ## Client Statistics
 
 ### `GET /api/v1/stats`

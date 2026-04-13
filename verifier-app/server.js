@@ -386,10 +386,22 @@ const csrfTokenMiddleware = (req, res, next) => {
   next();
 };
 
-// Rate limit
+// Rate limit – returns rich headers data
 async function checkRateLimit(req, apiKey) {
   // Use anonymized IP in rate limit key for better distribution
   const anonymizedIP = req.anonymizedIP || 'unknown';
+
+  // Fetch both limits in one query
+  const limitRes = await pool.query(
+    'SELECT rate_limit, daily_limit FROM api_keys WHERE api_key = $1',
+    [apiKey]
+  );
+  const rateLimit = limitRes.rows[0]?.rate_limit || 100;
+  const dailyLimit = limitRes.rows[0]?.daily_limit ?? null;
+
+  const now = Date.now();
+
+  // --- Per‑minute rate limit ---
   const key = `rate:${apiKey}:${anonymizedIP}`;
   const multi = redis.multi();
   multi.incr(key);
@@ -397,40 +409,56 @@ async function checkRateLimit(req, apiKey) {
   const [countRes, ttlRes] = await multi.exec();
 
   const count = countRes[1];
-  const ttl = ttlRes[1];
+  let ttl = ttlRes[1];
+  if (ttl === -1) {
+    ttl = 60;
+    await redis.expire(key, ttl);
+  }
+  const rateRemaining = Math.max(0, rateLimit - count);
+  const rateReset = now + (ttl * 1000);
 
-  // Retrieve per-key rate limit from database (cached? simple query for now)
-  const limitRes = await pool.query('SELECT rate_limit FROM api_keys WHERE api_key = $1', [apiKey]);
-  const limit = limitRes.rows[0]?.rate_limit || 100;
-
-  // Check daily limit (if set)
-  const dailyRes = await pool.query('SELECT daily_limit FROM api_keys WHERE api_key = $1', [apiKey]);
-  const dailyLimit = dailyRes.rows[0]?.daily_limit;
+  // --- Daily limit ---
+  let dailyRemaining = null;
+  let dailyReset = null;
   if (dailyLimit !== null && dailyLimit > 0) {
     const today = new Date().toISOString().slice(0, 10);
     const dailyKey = `daily:${apiKey}:${today}`;
-    const dailyCount = await redis.get(dailyKey);
-    const currentDaily = dailyCount ? parseInt(dailyCount) : 0;
-    if (currentDaily >= dailyLimit) {
-      logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Daily limit exceeded');
-      return { allowed: false, type: 'daily', limit: dailyLimit };
+    const dailyCountRaw = await redis.get(dailyKey);
+    const dailyCount = dailyCountRaw ? parseInt(dailyCountRaw) : 0;
+    dailyRemaining = Math.max(0, dailyLimit - dailyCount);
+    // reset at midnight UTC
+    const midnightUTC = new Date();
+    midnightUTC.setUTCHours(24, 0, 0, 0);
+    dailyReset = midnightUTC.getTime();
+
+    if (dailyCount >= dailyLimit) {
+      // Daily limit already exceeded
+      return {
+        allowed: false,
+        type: 'daily',
+        limit: dailyLimit,
+        remaining: dailyRemaining,
+        reset: dailyReset,
+        dailyLimit,
+        dailyRemaining,
+        dailyReset
+      };
     }
-    // Increment daily counter (with TTL until midnight)
-    const now = new Date();
-    const midnight = new Date(now);
-    midnight.setUTCHours(24, 0, 0, 0);
-    const ttlSeconds = Math.ceil((midnight - now) / 1000);
-    await redis.incr(dailyKey);
-    if (ttlSeconds > 0) await redis.expire(dailyKey, ttlSeconds);
   }
 
-  if (ttl === -1) await redis.expire(key, 60); // 1 minute window
-
-  if (count > limit) {
+  // Check per‑minute limit
+  if (count > rateLimit) {
     await redis.decr(key);
-    return { allowed: false, type: 'rate', limit: limit };
+    return {
+      allowed: false, type: 'rate', limit: rateLimit, remaining: rateRemaining, reset: rateReset,
+      dailyLimit, dailyRemaining, dailyReset
+    };
   }
-  return { allowed: true };
+  return {
+    allowed: true,
+    limit: rateLimit, remaining: rateRemaining, reset: rateReset,
+    dailyLimit, dailyRemaining, dailyReset
+  };
 }
 
 // Initialize DB
@@ -888,18 +916,32 @@ app.post('/api/v1/verify', async (req, res) => {
     return res.status(400).json({ status: 'error', message: 'Threshold must be between 18 and 25' });
   }
 
-  const rateCheck = await checkRateLimit(req, apiKey);
+  let rateCheck = await checkRateLimit(req, apiKey);
+
+  // Prepare headers (always sent, even on error)
+  const headers = {
+    'X-RateLimit-Limit': rateCheck.limit,
+    'X-RateLimit-Remaining': rateCheck.remaining,
+    'X-RateLimit-Reset': Math.ceil(rateCheck.reset / 1000),
+  };
+  // Ensure daily headers are present only if dailyLimit is a number (not null/undefined)
+  // Also ensure dailyRemaining is not null (it will be a number when dailyLimit is set)
+  if (typeof rateCheck.dailyLimit === 'number' && rateCheck.dailyLimit !== null && rateCheck.dailyRemaining !== null) {
+    // Convert dailyRemaining to number (it's already a number, but be safe)
+    headers['X-DailyLimit-Limit'] = rateCheck.dailyLimit;
+    headers['X-DailyLimit-Remaining'] = rateCheck.dailyRemaining ?? 0;
+    headers['X-DailyLimit-Reset'] = rateCheck.dailyReset ? Math.ceil(rateCheck.dailyReset / 1000) : null;
+  }
+
+  // Apply headers to response (even before error)
+  res.set(headers);
+
   if (!rateCheck.allowed) {
-    if (rateCheck.type === 'daily') {
-      logger.warn({ apiKey: apiKey.substring(0,8)+'...' }, 'Daily limit exceeded');
-      rateLimitedCounter.inc({ client_id: clientId, type: 'daily' });
-      return res.status(429).json({ status: 'error', message: `Daily limit exceeded (${rateCheck.limit} verifications/day)` });
-    } else {
-      // rate limit
-      logger.warn({ apiKey: apiKey.substring(0,8)+'...', anonymizedIP: req.anonymizedIP }, 'Rate limit exceeded');
-      rateLimitedCounter.inc({ client_id: clientId, type: 'rate' });
-      return res.status(429).json({ status: 'error', message: `Rate limit exceeded (${rateCheck.limit} requests/min)` });
-    }
+    const type = rateCheck.type === 'daily' ? 'daily' : 'rate';
+    const msg = type === 'daily'
+      ? `Daily limit exceeded (${rateCheck.limit} verifications/day)`
+      : `Rate limit exceeded (${rateCheck.limit} requests/min)`;
+    return res.status(429).json({ status: 'error', message: msg });
   }
 
   // Update last_used_at (async, don't await to avoid slowing response)
@@ -908,6 +950,15 @@ app.post('/api/v1/verify', async (req, res) => {
   });
 
   try {
+    // Increment daily counter if daily limit exists (only after passing checks)
+    if (rateCheck.dailyLimit && rateCheck.dailyLimit > 0) {
+      const today = new Date().toISOString().slice(0,10);
+      const dailyKey = `daily:${apiKey}:${today}`;
+      await redis.incr(dailyKey);
+      const midnight = new Date();
+      midnight.setUTCHours(24, 0, 0, 0);
+      await redis.expire(dailyKey, Math.ceil((midnight - Date.now()) / 1000));
+    }
     verifySchema.parse(req.body);
 
     // === REAL AGE VERIFICATION ===

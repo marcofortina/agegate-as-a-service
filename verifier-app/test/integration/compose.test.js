@@ -583,4 +583,28 @@ describe('Integration Tests with docker-compose', () => {
     await pool.end();
     await redis.quit();
   });
+
+  test('Rate limit headers are present in verify response', async () => {
+    // Register a new client to get a fresh key with default rate limits
+    const csrfToken = await getCsrfToken();
+    const reg = await agent
+      .post('/api/v1/register/public')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'headers-test.com', email: 'headers@test.com' })
+      .expect(200);
+    const apiKey = reg.body.api_key;
+
+    const res = await request(baseUrl)
+      .post('/api/v1/verify')
+      .set('x-api-key', apiKey)
+      .send({ client_id: 'headers-test.com', threshold: 18 });
+    expect(res.status).toBe(200);
+    expect(res.headers['x-ratelimit-limit']).toBe('100');
+    const remaining = parseInt(res.headers['x-ratelimit-remaining']);
+    expect(remaining).toBeGreaterThanOrEqual(0);
+    expect(remaining).toBeLessThanOrEqual(100);
+    expect(res.headers['x-ratelimit-reset']).toBeDefined();
+    // daily limit default is null, so daily headers should NOT be present
+    expect(res.headers['x-dailylimit-limit']).toBeUndefined();
+  });
 });

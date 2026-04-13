@@ -6,6 +6,16 @@ Additionally, you can set a **daily limit** (number of verifications per day) fo
 
 Both limits are enforced in real time using Redis.
 
+## Rate Limit Headers (best practice)
+
+Every response from the `/api/v1/verify` endpoint includes standard rate‑limit headers:
+- `X-RateLimit-Limit` – per‑minute limit configured for the key
+- `X-RateLimit-Remaining` – remaining requests in the current minute window
+- `X-RateLimit-Reset` – Unix timestamp (seconds) when the window resets
+- If a daily limit is set, the headers `X-DailyLimit-Limit`, `X-DailyLimit-Remaining`, and `X-DailyLimit-Reset` are also present.
+
+These headers allow clients to implement intelligent backoff and avoid hitting rate limits.
+
 ## How it works
 
 - The rate limit is enforced per `(api_key, anonymized_ip)` pair.

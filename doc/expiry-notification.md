@@ -20,7 +20,7 @@ The client receives an email with:
 
 ## Admin endpoints
 
-When registering a client via `POST /api/v1/register`, you can optionally provide an `email` field. For self‑onboarding (`POST /api/register/public`), the email is mandatory.
+When registering a client via `POST /api/v1/register`, you can optionally provide an `email` field. For self‑onboarding (`POST /api/v1/register/public`), the email is mandatory.
 
 ## Disabling notifications
 
