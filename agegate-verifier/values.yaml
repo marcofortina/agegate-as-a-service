@@ -44,38 +44,37 @@ env:
   PUBLIC_URL: "http://agegate.local"
   PORT: "8080"
   ADMIN_USER: "admin"
-  # ADMIN_PASS: set via secret (never in values!)
   TIMESCALEDB_HOST: "timescaledb"
   TIMESCALEDB_PORT: "5432"
   TIMESCALEDB_DB: "agegate"
   TIMESCALEDB_USER: "postgres"
-  # TIMESCALEDB_PASSWORD: set via secret
   REDIS_HOST: "redis"
   REDIS_PORT: "6379"
-  VERIFIER_BACKEND: "mock" # or "eidas" in future
+  VERIFIER_BACKEND: "mock"
   ALLOWED_ORIGINS: "http://agegate.local,https://yourdomain.it"
-  # Privacy & Anonymization (double anonymity)
-  # SESSION_SECRET: set via secret
   ANONYMIZE_IP: "true"
-  IP_SALT: "" # auto-generated if empty
   NODE_ENV: "production"
-  # Data retention
   RETENTION_DAYS: "30"
-  # OpenTelemetry
   OTEL_SERVICE_NAME: "agegate-verifier"
   OTEL_TRACES_ENDPOINT: "http://otel-collector:4318/v1/traces"
   OTEL_METRICS_ENDPOINT: "http://otel-collector:4318/v1/metrics"
-  # Email (self-onboarding)
   SMTP_HOST: ""
   SMTP_PORT: "587"
   SMTP_SECURE: "false"
+  FROM_EMAIL: "noreply@agegate.local"
+  STRIPE_PRICE_PRO_MONTHLY: "price_pro_monthly"
+
+# Secrets (sensitive values) - they will be stored in a Kubernetes Secret
+secrets:
+  ADMIN_PASS: ""
+  TIMESCALEDB_PASSWORD: ""
+  SESSION_SECRET: ""
+  REDIS_PASSWORD: ""
   SMTP_USER: ""
   SMTP_PASS: ""
-  FROM_EMAIL: "noreply@agegate.local"
-  # Stripe (for subscription billing)
   STRIPE_SECRET_KEY: ""
   STRIPE_WEBHOOK_SECRET: ""
-  STRIPE_PRICE_PRO_MONTHLY: "price_pro_monthly"
+  IP_SALT: ""
 
 # Subcharts
 redis: {}

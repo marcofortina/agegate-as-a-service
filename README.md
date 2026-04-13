@@ -50,8 +50,8 @@ helm upgrade --install agegate-verifier ./agegate-verifier \
   --namespace agegate \
   --create-namespace \
   --values agegate-verifier/values.yaml \
-  --set env.TIMESCALEDB_PASSWORD=YOUR_DB_PASSWORD \
-  --set env.ADMIN_PASS=YOUR_ADMIN_PASSWORD
+  --set secrets.TIMESCALEDB_PASSWORD=YOUR_DB_PASSWORD \
+  --set secrets.ADMIN_PASS=YOUR_ADMIN_PASSWORD
 ```
 
 ---
