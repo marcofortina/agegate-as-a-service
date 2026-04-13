@@ -3,6 +3,7 @@ try {
 } catch { /* dotenv not available, using env vars */ }
 
 const crypto = require('crypto');
+const net = require('net');
 const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
@@ -507,6 +508,7 @@ async function initDB() {
       is_active BOOLEAN DEFAULT true,
       stripe_customer_id TEXT,
       contact_email TEXT,
+      allowed_ips TEXT[],
       last_expiry_notification_sent DATE,
       default_threshold INTEGER DEFAULT 18,
       created_by TEXT
@@ -607,6 +609,35 @@ async function initDB() {
     await pool.query(`SELECT add_retention_policy('verifications', INTERVAL '${retentionDays} days', if_not_exists => TRUE);`);
     logger.info(`TimescaleDB retention policy set to ${retentionDays} days`);
   }
+}
+
+// Convert IPv4 string to integer (for CIDR matching)
+function ipToInt(ip) {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  return ((parseInt(parts[0], 10) << 24) >>> 0) +
+         ((parseInt(parts[1], 10) << 16) >>> 0) +
+         ((parseInt(parts[2], 10) << 8) >>> 0) +
+         parseInt(parts[3], 10);
+}
+
+// Helper to check if an IP is allowed based on allowed_ips list (CIDR or exact IP)
+function isIpAllowed(ip, allowedIps) {
+  if (!allowedIps || allowedIps.length === 0) return true;
+  if (!net.isIP(ip)) return false;
+  for (const entry of allowedIps) {
+    if (entry.includes('/')) {
+      // CIDR notation
+      const [network, maskBits] = entry.split('/');
+      const mask = parseInt(maskBits, 10);
+      const ipInt = ipToInt(ip);
+      const networkInt = ipToInt(network);
+      if (ipInt !== null && networkInt !== null && (ipInt >>> (32 - mask)) === (networkInt >>> (32 - mask))) return true;
+    } else {
+      if (ip === entry) return true;
+    }
+  }
+  return false;
 }
 
 // Cron job to check expiring API keys and send notifications (to be called daily)
@@ -890,7 +921,7 @@ app.post('/api/v1/verify', async (req, res) => {
 
   // Validate API key: exists, active, not expired
   const keyCheck = await pool.query(
-    `SELECT client_id, expires_at, is_active, default_threshold FROM api_keys WHERE api_key = $1`,
+    `SELECT client_id, expires_at, is_active, default_threshold, allowed_ips FROM api_keys WHERE api_key = $1`,
     [apiKey]
   );
 
@@ -914,6 +945,16 @@ app.post('/api/v1/verify', async (req, res) => {
   // Validate only once
   if (threshold < 18 || threshold > 25) {
     return res.status(400).json({ status: 'error', message: 'Threshold must be between 18 and 25' });
+  }
+
+  // IP allowlisting check (real IP, before anonymization)
+  const realIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip;
+  const allowedIps = keyRecord.allowed_ips; // from keyCheck.rows[0]
+  if (allowedIps && allowedIps.length > 0) {
+    if (!isIpAllowed(realIp, allowedIps)) {
+      logger.warn({ apiKey: apiKey.substring(0,8)+'...', realIp }, 'IP not allowed');
+      return res.status(403).json({ status: 'error', message: 'Forbidden: IP not in allowlist' });
+    }
   }
 
   let rateCheck = await checkRateLimit(req, apiKey);
@@ -2142,6 +2183,24 @@ app.patch('/api/v1/keys/:api_key/description', doubleCsrfProtection, async (req,
     client_id: result.rows[0].client_id,
     description: trimmedDesc
   });
+});
+
+// PATCH /api/v1/keys/:api_key/ip-allowlist - Update IP allowlist for an API key (admin only)
+app.patch('/api/v1/keys/:api_key/ip-allowlist', doubleCsrfProtection, async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { api_key } = req.params;
+  const { allowed_ips } = req.body;
+  if (!Array.isArray(allowed_ips)) {
+    return res.status(400).json({ error: 'allowed_ips must be an array of strings (IP or CIDR)' });
+  }
+  const result = await pool.query(
+    'UPDATE api_keys SET allowed_ips = $1 WHERE api_key = $2 RETURNING client_id',
+    [allowed_ips, api_key]
+  );
+  if (result.rows.length === 0) return res.status(404).json({ error: 'API key not found' });
+  const adminUser = getAdminUser(req);
+  await logAdminAction(adminUser, 'UPDATE_IP_ALLOWLIST', api_key, { allowed_ips });
+  res.json({ success: true, client_id: result.rows[0].client_id, allowed_ips });
 });
 
 // GET /api/v1/webhooks - List all webhooks (admin only)

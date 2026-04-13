@@ -1073,4 +1073,81 @@ describe('AgeGate as a Service - API Tests', () => {
 
     pool.query = originalQuery;
   });
+
+  test('POST /api/v1/verify - IP not in allowlist returns 403', async () => {
+    const { pool } = require('../server');
+    const originalQuery = pool.query;
+    // Mock API key with allowed_ips = ['192.168.1.0/24']
+    pool.query = jest.fn().mockImplementation((sql, _params) => {
+      if (sql.includes('SELECT rate_limit, daily_limit')) {
+        return Promise.resolve({ rows: [{ rate_limit: 100, daily_limit: null }] });
+      }
+      if (sql.includes('SELECT client_id, expires_at, is_active, default_threshold, allowed_ips')) {
+        return Promise.resolve({ rows: [{ client_id: 'test.local', expires_at: null, is_active: true, default_threshold: 18, allowed_ips: ['192.168.1.0/24'] }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const Redis = require('ioredis');
+    Redis.__mockInstance.multi.mockReturnValue({
+      incr: jest.fn(),
+      ttl: jest.fn(),
+      exec: jest.fn().mockResolvedValue([[null, 1], [null, 60]])
+    });
+    // Simulate request from IP 10.0.0.1
+    const res = await request(app)
+      .post('/api/v1/verify')
+      .set('x-api-key', 'test-key-123')
+      .set('X-Forwarded-For', '10.0.0.1')
+      .send({ client_id: 'test.local', threshold: 18 });
+    expect(res.status).toBe(403);
+    expect(res.body.message).toContain('IP not in allowlist');
+    pool.query = originalQuery;
+  });
+
+  test('POST /api/v1/verify - IP in allowlist passes', async () => {
+    const { pool } = require('../server');
+    const originalQuery = pool.query;
+    pool.query = jest.fn().mockImplementation((sql, _params) => {
+      if (sql.includes('SELECT rate_limit, daily_limit')) {
+        return Promise.resolve({ rows: [{ rate_limit: 100, daily_limit: null }] });
+      }
+      if (sql.includes('SELECT client_id, expires_at, is_active, default_threshold, allowed_ips')) {
+        return Promise.resolve({ rows: [{ client_id: 'test.local', expires_at: null, is_active: true, default_threshold: 18, allowed_ips: ['192.168.1.0/24'] }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const Redis = require('ioredis');
+    Redis.__mockInstance.multi.mockReturnValue({
+      incr: jest.fn(),
+      ttl: jest.fn(),
+      exec: jest.fn().mockResolvedValue([[null, 1], [null, 60]])
+    });
+    const res = await request(app)
+      .post('/api/v1/verify')
+      .set('x-api-key', 'test-key-123')
+      .set('X-Forwarded-For', '192.168.1.100')
+      .send({ client_id: 'test.local', threshold: 18 });
+    expect(res.status).toBe(200);
+    pool.query = originalQuery;
+  });
+
+  test('PATCH /api/v1/keys/:api_key/ip-allowlist updates allowed_ips', async () => {
+    const { pool } = require('../server');
+    const originalQuery = pool.query;
+    // Mock UPDATE to return a row
+    pool.query = jest.fn().mockImplementation((sql, params) => {
+      if (sql.includes('UPDATE api_keys SET allowed_ips')) {
+        return Promise.resolve({ rows: [{ client_id: 'test.local' }] });
+      }
+      return originalQuery(sql, params);
+    });
+    const csrfToken = await getCsrfToken();
+    const res = await agent
+      .patch('/api/v1/keys/test-key-123/ip-allowlist')
+      .set('CSRF-Token', csrfToken)
+      .send({ allowed_ips: ['192.168.1.0/24', '10.0.0.5'] })
+      .expect(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.allowed_ips).toEqual(['192.168.1.0/24', '10.0.0.5']);
+  });
 });

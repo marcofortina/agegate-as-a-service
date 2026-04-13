@@ -84,6 +84,8 @@ Additional admin endpoints:
 - `PATCH /api/v1/keys/:api_key/daily-limit` – Update daily quota
 - `PATCH /api/v1/keys/:api_key/description` – Update description of an API key
 
+The IP allowlist, if set, restricts verification requests to only those IP addresses or CIDR ranges. Requests from other IPs receive a `403 Forbidden`.
+
 ## Other Public Endpoints
 
 - `GET /health` – Health check

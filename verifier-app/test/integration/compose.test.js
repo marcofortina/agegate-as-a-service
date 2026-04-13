@@ -607,4 +607,54 @@ describe('Integration Tests with docker-compose', () => {
     // daily limit default is null, so daily headers should NOT be present
     expect(res.headers['x-dailylimit-limit']).toBeUndefined();
   });
+
+  test('IP allowlisting: requests from non-allowed IP are blocked', async () => {
+    // Register a client
+    const csrfToken = await getCsrfToken();
+    const reg = await agent
+      .post('/api/v1/register')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'ip-allowlist-test.com' })
+      .expect(200);
+    const apiKey = reg.body.api_key;
+
+    // Set allowed_ips via admin endpoint
+    await agent
+      .patch(`/api/v1/keys/${apiKey}/ip-allowlist`)
+      .set('CSRF-Token', csrfToken)
+      .send({ allowed_ips: ['127.0.0.1/32'] })
+      .expect(200);
+
+    // Request from a different IP (simulate via X-Forwarded-For)
+    const res = await request(baseUrl)
+      .post('/api/v1/verify')
+      .set('x-api-key', apiKey)
+      .set('X-Forwarded-For', '192.168.1.100')
+      .send({ client_id: 'ip-allowlist-test.com', threshold: 18 });
+    expect(res.status).toBe(403);
+    expect(res.body.message).toContain('IP not in allowlist');
+  });
+
+  test('IP allowlisting: requests from allowed IP pass', async () => {
+    const csrfToken = await getCsrfToken();
+    const reg = await agent
+      .post('/api/v1/register')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'ip-allowlist-test2.com' })
+      .expect(200);
+    const apiKey = reg.body.api_key;
+
+    await agent
+      .patch(`/api/v1/keys/${apiKey}/ip-allowlist`)
+      .set('CSRF-Token', csrfToken)
+      .send({ allowed_ips: ['127.0.0.1/32', '::1/128'] })
+      .expect(200);
+
+    const res = await request(baseUrl)
+      .post('/api/v1/verify')
+      .set('x-api-key', apiKey)
+      .set('X-Forwarded-For', '127.0.0.1')
+      .send({ client_id: 'ip-allowlist-test2.com', threshold: 18 });
+    expect(res.status).toBe(200);
+  });
 });

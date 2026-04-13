@@ -24,6 +24,14 @@ Values rendered in the dashboard are escaped before being inserted into HTML or 
 
 Client IP addresses are never logged or stored; only an irreversible SHA256 hash with a daily rotating salt is kept. Rate limiting uses the hashed IP.
 
+## IP Allowlisting (Optional)
+
+For clients with strict security requirements, you can restrict which IP addresses or CIDR ranges can call the `/api/v1/verify` endpoint using a given API key. When an allowlist is set, requests from other IPs receive a `403 Forbidden`.
+
+To set or update the allowlist, use the admin endpoint `PATCH /api/v1/keys/:api_key/ip-allowlist` with a JSON body `{ "allowed_ips": ["192.168.1.0/24", "10.0.0.5"] }`.
+
+The allowlist is stored in the `api_keys` table as a PostgreSQL `TEXT[]` array. Both exact IP addresses and CIDR notation (e.g., `192.168.1.0/24`) are supported.
+
 ## HTTPS
 
 In production, the service should be deployed behind a reverse proxy with HTTPS enabled. Set `SESSION_SECRET` to a strong random value. Security headers (Helmet) and CORS are configured conditionally based on the `PUBLIC_URL` protocol.
