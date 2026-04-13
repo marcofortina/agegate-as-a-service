@@ -1,4 +1,9 @@
 const { execSync, spawn } = require('child_process');
+
+jest.mock('nodemailer', () => ({
+  createTransport: jest.fn().mockReturnValue({ sendMail: jest.fn().mockResolvedValue(true) })
+}));
+
 const path = require('path');
 const request = require('supertest');
 const waitOn = require('wait-on');
@@ -22,6 +27,11 @@ beforeAll(async () => {
 
   // Force verified true for mock backend to make tests deterministic
   process.env.FORCE_VERIFIED = 'true';
+
+  // SMTP configuration for expiry notification tests
+  process.env.SMTP_HOST = 'smtp.mock';
+  process.env.SMTP_PORT = '25';
+  process.env.FROM_EMAIL = 'test@example.com';
 
   // Wait for containers to be ready
   await waitOn({ resources: ['tcp:localhost:5433', 'tcp:localhost:6380'], timeout: 30000 });
@@ -539,5 +549,38 @@ describe('Integration Tests with docker-compose', () => {
       .set('x-api-key', stripeApiKey)
       .expect(200);
     expect(res.text).toContain('Your Subscription Plan');
+  });
+
+  test('Expiry notification is sent for expiring key', async () => {
+    // 1. Register a client with email
+    const csrfToken = await getCsrfToken();
+    const reg = await agent
+      .post('/api/v1/register/public')
+      .set('CSRF-Token', csrfToken)
+      .send({ client_id: 'expiry-test.com', email: 'expiry@test.com' })
+      .expect(200);
+    const apiKey = reg.body.api_key;
+
+    // 2. Manually set expiry date to 10 days from now
+    const { pool, checkExpiringKeysAndNotify, redis } = require('../../server');
+    const newExpiry = new Date(Date.now() + 10 * 86400000).toISOString();
+    await pool.query(
+      'UPDATE api_keys SET expires_at = $1, last_expiry_notification_sent = NULL WHERE api_key = $2',
+      [newExpiry, apiKey]
+    );
+
+    // 3. Run the expiry checker
+    await checkExpiringKeysAndNotify();
+
+    // 4. Verify that the notification was sent (last_expiry_notification_sent updated)
+    const result = await pool.query(
+      'SELECT last_expiry_notification_sent FROM api_keys WHERE api_key = $1',
+      [apiKey]
+    );
+    expect(result.rows[0].last_expiry_notification_sent).not.toBeNull();
+
+    // Close the imported pool to avoid termination errors
+    await pool.end();
+    await redis.quit();
   });
 });

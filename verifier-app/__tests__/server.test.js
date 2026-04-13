@@ -14,6 +14,14 @@ process.env.LOG_LEVEL = 'error';
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS || 'admin123';
 
+// Mock nodemailer e configura SMTP per i test di expiry notification
+process.env.SMTP_HOST = 'smtp.mock';
+process.env.SMTP_PORT = '25';
+process.env.FROM_EMAIL = 'test@example.com';
+jest.mock('nodemailer', () => ({
+  createTransport: jest.fn().mockReturnValue({ sendMail: jest.fn().mockResolvedValue(true) })
+}));
+
 const request = require('supertest');
 
 // ================= MOCKS =================
@@ -1006,5 +1014,25 @@ describe('AgeGate as a Service - API Tests', () => {
     await request(app)
       .post('/api/v1/stripe/create-checkout-session')
       .expect(401);
+  });
+
+  test('checkExpiringKeysAndNotify sends email for expiring keys', async () => {
+    const { checkExpiringKeysAndNotify, emailTransporter, pool } = require('../server');
+    const originalQuery = pool.query;
+    // Mock the query to return an expiring key
+    pool.query = jest.fn().mockResolvedValueOnce({
+      rows: [{
+        client_id: 'test-expiry',
+        api_key: 'agk_test',
+        expires_at: new Date(Date.now() + 10 * 86400000), // 10 days from now
+        contact_email: 'expiry@test.com',
+        last_expiry_notification_sent: null
+      }]
+    });
+    await checkExpiringKeysAndNotify();
+    // Check that emailTransporter.sendMail was called
+    expect(emailTransporter.sendMail).toHaveBeenCalled();
+    // Restore original query
+    pool.query = originalQuery;
   });
 });
