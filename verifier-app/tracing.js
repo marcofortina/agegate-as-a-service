@@ -33,7 +33,13 @@ const sdk = new NodeSDK({
 process.on('SIGTERM', () => {
   sdk.shutdown()
     .then(() => console.log('OTel SDK shut down successfully'))
-    .catch((error) => console.error('Error shutting down OTel SDK', error))
+    .catch((error) => {
+      if (error.code === 'ENOTFOUND' || (error.message && error.message.includes('getaddrinfo ENOTFOUND'))) {
+        console.warn('OTel collector not reachable, ignoring shutdown error');
+      } else {
+        console.error('Error shutting down OTel SDK', error);
+      }
+    })
     .finally(() => process.exit(0));
 });
 
